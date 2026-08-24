@@ -9,6 +9,7 @@ import logging
 import os
 import tempfile
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from faster_whisper import WhisperModel
@@ -23,18 +24,22 @@ MAX_BYTES = int(os.getenv("WHISPER_MAX_BYTES", str(64 * 1024 * 1024)))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("asr")
 
-app = FastAPI(title="tracker-asr")
 model: WhisperModel | None = None
 
 
-@app.on_event("startup")
-def load_model() -> None:
+@asynccontextmanager
+async def lifespan(_: FastAPI):
     """Модель грузится один раз на старте: на CPU это десятки секунд."""
     global model
     started = time.monotonic()
     log.info("гружу модель %s (%s, %s)", MODEL_NAME, DEVICE, COMPUTE_TYPE)
     model = WhisperModel(MODEL_NAME, device=DEVICE, compute_type=COMPUTE_TYPE)
     log.info("модель готова за %.1f с", time.monotonic() - started)
+    yield
+    model = None
+
+
+app = FastAPI(title="tracker-asr", lifespan=lifespan)
 
 
 @app.get("/health")

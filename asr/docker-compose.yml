@@ -17,7 +17,9 @@ services:
       # Кэш весов, иначе модель качается заново на каждый пересоздание контейнера.
       - asr-models:/models
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8081/health')"]
+      # Проверяем именно готовность модели: пока веса грузятся, сервис отвечает
+      # 200 с ok=false, и healthy до этого момента ставить нельзя.
+      test: ["CMD", "python", "-c", "import json,urllib.request,sys; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8081/health'))['ok'] else 1)"]
       interval: 30s
       timeout: 10s
       retries: 5

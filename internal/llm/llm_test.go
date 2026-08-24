@@ -1,6 +1,11 @@
 package llm
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -83,5 +88,65 @@ func TestDecodeSkipsBrokenMoney(t *testing.T) {
 	}
 	if v.Money[0].Currency != "RUB" || v.Money[0].Category != "отложено" {
 		t.Fatalf("умолчания не проставились: %+v", v.Money[0])
+	}
+}
+
+// Проверяем провод к Ollama: путь, format=json и нулевую температуру. Ошибка в
+// любом из них проявилась бы только на живом голосовом.
+func TestParseCallsOllamaCorrectly(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"response":"{\"day\":{\"sleep\":7,\"clean\":true}}"}`)
+	}))
+	defer srv.Close()
+
+	v, err := New(srv.URL, "qwen2.5:7b-instruct").Parse(context.Background(), "спал семь, чисто", "2026-08-24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/api/generate" {
+		t.Fatalf("путь %q", gotPath)
+	}
+	if gotBody["model"] != "qwen2.5:7b-instruct" || gotBody["format"] != "json" {
+		t.Fatalf("тело запроса: %v", gotBody)
+	}
+	if gotBody["stream"] != false {
+		t.Fatalf("stream должен быть false: %v", gotBody["stream"])
+	}
+	if opts, ok := gotBody["options"].(map[string]any); !ok || opts["temperature"] != float64(0) {
+		t.Fatalf("температура должна быть нулевой: %v", gotBody["options"])
+	}
+	if sys, _ := gotBody["system"].(string); !strings.Contains(sys, `"sleep"`) {
+		t.Fatal("в системный промпт не попала схема")
+	}
+	if v.Day.Sleep == nil || *v.Day.Sleep != 7 {
+		t.Fatalf("сон: %v", v.Day.Sleep)
+	}
+}
+
+// Ollama не поднята — ошибка должна быть внятной, на неё завязан фолбэк.
+func TestParseServiceDown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+	_, err := New(url, "m").Parse(context.Background(), "текст", "2026-08-24")
+	if err == nil || !strings.Contains(err.Error(), "ollama недоступна") {
+		t.Fatalf("ошибка %v", err)
+	}
+}
+
+// Ollama отвечает 200, но с ошибкой в теле — например, модель не скачана.
+func TestParseModelMissing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"error":"model 'qwen2.5:7b-instruct' not found, try pulling it first"}`)
+	}))
+	defer srv.Close()
+	_, err := New(srv.URL, "qwen2.5:7b-instruct").Parse(context.Background(), "текст", "2026-08-24")
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("ошибка %v", err)
 	}
 }
