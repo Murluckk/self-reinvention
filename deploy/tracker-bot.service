@@ -1,0 +1,32 @@
+[Unit]
+Description=Telegram tracking bot
+Documentation=https://github.com/murluckk/self-reinvention
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tracker
+Group=tracker
+WorkingDirectory=/opt/tracker
+ExecStart=/opt/tracker/tracker-bot
+EnvironmentFile=/etc/tracker/bot.env
+Restart=always
+RestartSec=5s
+# Бот висит на long polling до 30 секунд, дадим ему закрыться самому.
+KillSignal=SIGTERM
+TimeoutStopSec=45s
+
+# Песочница: боту нужны только свой каталог с базой, сеть и ffmpeg.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/tracker/data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
