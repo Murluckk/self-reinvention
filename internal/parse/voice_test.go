@@ -22,19 +22,17 @@ func TestVoiceRegexNegations(t *testing.T) {
 }
 
 func TestVoiceRegexNumbers(t *testing.T) {
-	v := ParseVoiceRegex("вес 73.4, съел 2100 ккал и 120 грамм белка, работал 8 часов, тг 3 раза", today)
+	v := ParseVoiceRegex("вес 73.4, работал 8 часов, тг 3 раза", today)
 	mustFloat(t, v.Day.Weight, 73.4)
-	mustInt(t, v.Day.Kcal, 2100)
-	mustInt(t, v.Day.Protein, 120)
 	mustFloat(t, v.Day.Work, 8)
 	mustInt(t, v.Day.Telegram, 3)
 }
 
 func TestVoiceRegexScales(t *testing.T) {
-	v := ParseVoiceRegex("фокус 4, настроение 3, энергия 2", today)
-	mustInt(t, v.Day.Focus, 4)
-	mustInt(t, v.Day.Mood, 3)
-	mustInt(t, v.Day.Energy, 2)
+	v := ParseVoiceRegex("фокус 10, настроение 8, энергия 6", today)
+	mustInt(t, v.Day.Focus, 10)
+	mustInt(t, v.Day.Mood, 8)
+	mustInt(t, v.Day.Energy, 6)
 }
 
 func TestVoiceRegexMoney(t *testing.T) {

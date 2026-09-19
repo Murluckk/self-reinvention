@@ -33,7 +33,7 @@ func Schema() string {
 		extra := ""
 		switch f.Kind {
 		case model.KindScale:
-			extra = ", целое 1..5"
+			extra = ", целое 1..10"
 		case model.KindTime:
 			extra = ", строка \"HH:MM\""
 		}

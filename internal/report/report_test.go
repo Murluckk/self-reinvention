@@ -20,7 +20,6 @@ func testCfg() *config.Config {
 		MaxEnglishSkipsWeek: 1,
 		MinSleepAvg:         7.0,
 		MaxWakeSpreadH:      1.5,
-		MinProteinG:         110,
 		MinSavingsRate:      0.55,
 	}
 }
@@ -28,12 +27,12 @@ func testCfg() *config.Config {
 // week строит семь дней 2026-08-18..2026-08-24 с предсказуемыми значениями.
 func week() []*model.Day {
 	return []*model.Day{
-		{Date: "2026-08-18", Sleep: f(7), Wake: s("07:00"), Workout: s("зал"), English: i(40), Kcal: i(2100), Protein: i(120), Work: f(8), Clean: bp(true), Weight: f(74), Telegram: i(3), Focus: i(4), Mood: i(4), Energy: i(4), Cooked: bp(true)},
-		{Date: "2026-08-19", Sleep: f(6), Wake: s("07:30"), Workout: s("бег"), English: i(30), Kcal: i(1900), Protein: i(100), Work: f(9), Clean: bp(true), Telegram: i(5), Focus: i(3), Mood: i(3), Energy: i(3)},
-		{Date: "2026-08-20", Sleep: f(8), Wake: s("08:00"), Workout: s("нет"), English: i(0), Kcal: i(2300), Protein: i(90), Work: f(7), Clean: bp(false), Telegram: i(8), Focus: i(2), Mood: i(2), Energy: i(2)},
-		{Date: "2026-08-21", Sleep: f(7.5), Wake: s("07:15"), Workout: s("зал"), English: i(45), Protein: i(130), Work: f(8), Clean: bp(true), Shift: bp(true), Focus: i(4), Mood: i(4), Energy: i(5), Cooked: bp(true)},
-		{Date: "2026-08-22", Sleep: f(9), Wake: s("09:30"), English: i(20), Work: f(0), DayOff: bp(true), Clean: bp(true), Focus: i(5), Mood: i(5), Energy: i(5)},
-		{Date: "2026-08-23", Sleep: f(7), Wake: s("07:45"), Workout: s("улица"), English: i(60), Protein: i(140), Work: f(4), Clean: bp(true), Weight: f(73.2), Cooked: bp(true)},
+		{Date: "2026-08-18", Sleep: f(7), Wake: s("07:00"), Workout: s("зал"), English: i(40), Work: f(8), Clean: bp(true), Weight: f(74), Telegram: i(3), Focus: i(8), Mood: i(8), Energy: i(8), Cooked: bp(true)},
+		{Date: "2026-08-19", Sleep: f(6), Wake: s("07:30"), Workout: s("бег"), English: i(30), Work: f(9), Clean: bp(true), Telegram: i(5), Focus: i(6), Mood: i(6), Energy: i(6)},
+		{Date: "2026-08-20", Sleep: f(8), Wake: s("08:00"), Workout: s("нет"), English: i(0), Work: f(7), Clean: bp(false), Telegram: i(8), Focus: i(4), Mood: i(4), Energy: i(4)},
+		{Date: "2026-08-21", Sleep: f(7.5), Wake: s("07:15"), Workout: s("зал"), English: i(45), Work: f(8), Clean: bp(true), Shift: bp(true), Focus: i(8), Mood: i(8), Energy: i(10), Cooked: bp(true)},
+		{Date: "2026-08-22", Sleep: f(9), Wake: s("09:30"), English: i(20), Work: f(0), DayOff: bp(true), Clean: bp(true), Focus: i(10), Mood: i(10), Energy: i(10)},
+		{Date: "2026-08-23", Sleep: f(7), Wake: s("07:45"), Workout: s("улица"), English: i(60), Work: f(4), Clean: bp(true), Weight: f(73.2), Cooked: bp(true)},
 		{Date: "2026-08-24", Sleep: f(6.5), Wake: s("07:00"), Workout: s("зал"), English: i(35), Work: f(8), Clean: bp(true), Telegram: i(2)},
 	}
 }
@@ -115,16 +114,13 @@ func TestAggregateWeightDelta(t *testing.T) {
 	}
 }
 
-func TestAggregateNutrition(t *testing.T) {
+func TestAggregateState(t *testing.T) {
 	st := build(t, week(), nil, nil)
-	if got := st.Kcal.Avg(); got != 2100 {
-		t.Fatalf("средние ккал %.0f", got)
+	if got := st.Focus.Avg(); got != 7.2 {
+		t.Fatalf("средний фокус %.1f", got)
 	}
-	if got := st.Protein.Avg(); got != 116 {
-		t.Fatalf("средний белок %.0f", got)
-	}
-	if st.CookedDays != 3 {
-		t.Fatalf("дней готовки %d", st.CookedDays)
+	if got, _ := st.Energy.Max(); got != 10 {
+		t.Fatalf("максимальная энергия %.0f", got)
 	}
 }
 
@@ -160,8 +156,8 @@ func TestFlags(t *testing.T) {
 			t.Fatalf("ожидал флаг %q, получил:\n%s", want, joined)
 		}
 	}
-	// сон 7.29 и белок 116 в норме — флагов по ним быть не должно
-	for _, unwanted := range []string{"средний сон", "средний белок", "пропусков английского"} {
+	// сон 7.29 в норме — флага по нему быть не должно
+	for _, unwanted := range []string{"средний сон", "пропусков английского"} {
 		if strings.Contains(joined, unwanted) {
 			t.Fatalf("лишний флаг %q:\n%s", unwanted, joined)
 		}
@@ -187,7 +183,7 @@ func TestMarkdownIsSelfContained(t *testing.T) {
 	md := Markdown(build(t, week(), nil, notes))
 	for _, want := range []string{
 		"# Разбор: 2026-08-18 — 2026-08-24",
-		"## Сон", "## Тренировки", "## Английский", "## Питание", "## Вес",
+		"## Сон", "## Тренировки", "## Английский", "## Вес",
 		"## Работа", "## Чистые дни", "## Телеграм вне окон", "## Состояние",
 		"## Деньги", "## Стрики", "## Флаги", "## По дням", "## Заметки",
 		"перенести тренировки на утро", "тяжёлый день", "#идея",

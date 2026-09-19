@@ -12,13 +12,16 @@ import (
 // Config — всё, что боту нужно знать о внешнем мире, плюс пороги для флагов
 // недельного отчёта.
 type Config struct {
-	BotToken    string
-	OwnerID     int64
-	Location    *time.Location
-	DataPath    string
-	ASRURL      string
-	OllamaURL   string
-	OllamaModel string
+	BotToken          string
+	OwnerID           int64
+	Location          *time.Location
+	DataPath          string
+	ASRURL            string
+	OllamaURL         string
+	OllamaModel       string
+	DashboardAddr     string
+	DashboardUser     string
+	DashboardPassword string
 
 	// Пороги для блока «флаги» в недельной выгрузке.
 	MinFullDaysOff30    int
@@ -26,7 +29,6 @@ type Config struct {
 	MaxEnglishSkipsWeek int
 	MinSleepAvg         float64
 	MaxWakeSpreadH      float64
-	MinProteinG         int
 	MinSavingsRate      float64
 
 	// Время напоминаний в часовом поясе Location.
@@ -44,12 +46,14 @@ func Load() (*Config, error) {
 		ASRURL:              env("ASR_URL", "http://127.0.0.1:8081/transcribe"),
 		OllamaURL:           env("OLLAMA_URL", "http://127.0.0.1:11434"),
 		OllamaModel:         env("OLLAMA_MODEL", "qwen2.5:7b-instruct"),
+		DashboardAddr:       os.Getenv("DASHBOARD_ADDR"),
+		DashboardUser:       env("DASHBOARD_USER", "tracker"),
+		DashboardPassword:   os.Getenv("DASHBOARD_PASSWORD"),
 		MinFullDaysOff30:    envInt("MIN_FULL_DAYS_OFF_30", 4),
 		MaxStreakNoDayOff:   envInt("MAX_STREAK_NO_DAY_OFF", 12),
 		MaxEnglishSkipsWeek: envInt("MAX_ENGLISH_SKIPS_WEEK", 1),
 		MinSleepAvg:         envFloat("MIN_SLEEP_AVG", 7.0),
 		MaxWakeSpreadH:      envFloat("MAX_WAKE_SPREAD_H", 1.5),
-		MinProteinG:         envInt("MIN_PROTEIN_G", 110),
 		MinSavingsRate:      envFloat("MIN_SAVINGS_RATE", 0.55),
 		DailyReminder:       env("DAILY_REMINDER", "23:00"),
 		WeeklyReport:        env("WEEKLY_REPORT", "12:40"),
@@ -58,6 +62,9 @@ func Load() (*Config, error) {
 	}
 	if c.BotToken == "" {
 		return nil, fmt.Errorf("BOT_TOKEN не задан")
+	}
+	if c.DashboardAddr != "" && c.DashboardPassword == "" {
+		return nil, fmt.Errorf("DASHBOARD_PASSWORD обязателен при включённом DASHBOARD_ADDR")
 	}
 	owner := os.Getenv("OWNER_ID")
 	if owner == "" {

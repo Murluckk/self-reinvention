@@ -20,7 +20,7 @@ const today = "2026-08-24"
 
 func testCfg() *config.Config {
 	return &config.Config{Location: time.UTC, MinFullDaysOff30: 4, MaxStreakNoDayOff: 12,
-		MaxEnglishSkipsWeek: 1, MinSleepAvg: 7, MaxWakeSpreadH: 1.5, MinProteinG: 110, MinSavingsRate: 0.55}
+		MaxEnglishSkipsWeek: 1, MinSleepAvg: 7, MaxWakeSpreadH: 1.5, MinSavingsRate: 0.55}
 }
 
 func TestPipelineFromCommandsToReport(t *testing.T) {
@@ -32,10 +32,10 @@ func TestPipelineFromCommandsToReport(t *testing.T) {
 
 	// Так это выглядит в реальном использовании: короткие строки в течение дня.
 	inputs := []string{
-		"2026-08-18 сон 7 подъем 7:00 зал англ 40 ккал 2100 белок 120 работа 8 чисто готовил фокус 4 вес 74",
+		"2026-08-18 сон 7 подъем 7:00 зал англ 40 работа 8 чисто готовил фокус 8 вес 74",
 		"2026-08-19 сон 6.5 подъем 7:30 бег англ 30 работа 9 чисто тг 5",
 		"2026-08-20 сон 8 подъем 8:00 трен нет англ 0 работа 7 чисто нет тг 8 note сорвался после созвона",
-		"2026-08-21 сон 7.5 подъем 7:15 зал англ 45 работа 8 смена чисто белок 130",
+		"2026-08-21 сон 7.5 подъем 7:15 зал англ 45 работа 8 смена чисто",
 		"2026-08-22 сон 9 подъем 9:30 выходной англ 20 чисто работа 0",
 		"2026-08-23 сон 7 подъем 7:45 улица англ 60 работа 4 чисто вес 73.2 готовил",
 		"2026-08-24 сон 6.5 подъем 7:00 зал англ 35 работа 8 чисто тг 2",
@@ -50,7 +50,7 @@ func TestPipelineFromCommandsToReport(t *testing.T) {
 		}
 	}
 	// Дописывание задним числом не должно ломать уже записанное.
-	res := parse.ParseDay("2026-08-19 ккал 1900 фокус 3", today)
+	res := parse.ParseDay("2026-08-19 фокус 6", today)
 	if err := st.UpsertDay(res.Day); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestPipelineFromCommandsToReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Sleep == nil || *d.Sleep != 6.5 || d.Kcal == nil || *d.Kcal != 1900 {
+	if d.Sleep == nil || *d.Sleep != 6.5 || d.Focus == nil || *d.Focus != 6 {
 		t.Fatalf("дописывание затёрло данные: %+v", d)
 	}
 

@@ -14,6 +14,7 @@ import (
 	"github.com/murluckk/self-reinvention/internal/asr"
 	"github.com/murluckk/self-reinvention/internal/bot"
 	"github.com/murluckk/self-reinvention/internal/config"
+	"github.com/murluckk/self-reinvention/internal/dashboard"
 	"github.com/murluckk/self-reinvention/internal/llm"
 	"github.com/murluckk/self-reinvention/internal/scheduler"
 	"github.com/murluckk/self-reinvention/internal/store"
@@ -59,6 +60,16 @@ func main() {
 			log.Error("бот остановился", "err", err)
 		}
 	}()
+	if cfg.DashboardAddr != "" {
+		dash := dashboard.New(cfg, st, log)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := dash.Run(ctx); err != nil {
+				log.Error("дашборд остановился", "err", err)
+			}
+		}()
+	}
 
 	log.Info("запустился", "owner", cfg.OwnerID, "tz", cfg.Location.String(), "data", cfg.DataPath)
 	<-ctx.Done()

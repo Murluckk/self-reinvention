@@ -63,14 +63,13 @@ func TestParseDayEqualsSyntax(t *testing.T) {
 }
 
 func TestParseDaySpaceSyntaxAndUnits(t *testing.T) {
-	res := ParseDay("сон 7,5ч вес 73,4кг англ 40мин ккал 2100", today)
+	res := ParseDay("сон 7,5ч вес 73,4кг англ 40мин", today)
 	if len(res.Errors) != 0 {
 		t.Fatalf("неожиданные ошибки: %v", res.Errors)
 	}
 	mustFloat(t, res.Day.Sleep, 7.5)
 	mustFloat(t, res.Day.Weight, 73.4)
 	mustInt(t, res.Day.English, 40)
-	mustInt(t, res.Day.Kcal, 2100)
 }
 
 func TestParseDayBareBoolFlags(t *testing.T) {
@@ -127,7 +126,7 @@ func TestParseDayTimeNormalization(t *testing.T) {
 }
 
 func TestParseDayReportsErrors(t *testing.T) {
-	res := ParseDay("сон абв фигня 5 фокус 9", today)
+	res := ParseDay("сон абв фигня 5 фокус 11", today)
 	if len(res.Errors) != 3 {
 		t.Fatalf("ожидал три претензии, получил %v", res.Errors)
 	}
@@ -164,12 +163,15 @@ func TestMergeKeepsExistingValues(t *testing.T) {
 }
 
 func TestScaleValidation(t *testing.T) {
-	res := ParseDay("фокус 5 настроение 0", today)
-	mustInt(t, res.Day.Focus, 5)
+	res := ParseDay("фокус 10 настроение 11 энергия 0", today)
+	mustInt(t, res.Day.Focus, 10)
 	if res.Day.Mood != nil {
-		t.Fatal("0 вне шкалы 1..5 записываться не должен")
+		t.Fatal("11 вне шкалы 1..10 записываться не должен")
 	}
-	if len(res.Errors) != 1 {
-		t.Fatalf("ожидал одну претензию, получил %v", res.Errors)
+	if res.Day.Energy != nil {
+		t.Fatal("0 вне шкалы 1..10 записываться не должен")
+	}
+	if len(res.Errors) != 2 {
+		t.Fatalf("ожидал две претензии, получил %v", res.Errors)
 	}
 }

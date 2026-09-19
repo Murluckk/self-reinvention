@@ -130,8 +130,6 @@ type Stats struct {
 	Wake     Series // часы с дробной частью
 	Weight   Series
 	English  Series
-	Kcal     Series
-	Protein  Series
 	Work     Series
 	Telegram Series
 	Focus    Series
@@ -142,7 +140,6 @@ type Stats struct {
 	WorkoutTypes map[string]int
 	EnglishDays  int
 	EnglishSkips int
-	CookedDays   int
 	Shifts       int
 	DaysOff      int
 	MaxNoDayOff  int
@@ -206,12 +203,6 @@ func Build(in Input) *Stats {
 				s.EnglishSkips++
 			}
 		}
-		if d.Kcal != nil {
-			s.Kcal.Add(d.Date, float64(*d.Kcal))
-		}
-		if d.Protein != nil {
-			s.Protein.Add(d.Date, float64(*d.Protein))
-		}
 		if d.Work != nil {
 			s.Work.Add(d.Date, *d.Work)
 		}
@@ -230,9 +221,6 @@ func Build(in Input) *Stats {
 		if d.Workout != nil && *d.Workout != "" && *d.Workout != "нет" {
 			s.Workouts++
 			s.WorkoutTypes[*d.Workout]++
-		}
-		if d.Cooked != nil && *d.Cooked {
-			s.CookedDays++
 		}
 		if d.Shift != nil && *d.Shift {
 			s.Shifts++
@@ -341,9 +329,6 @@ func flags(s *Stats, cfg *config.Config) []string {
 	}
 	if s.Wake.N() > 1 && s.Wake.Spread() > cfg.MaxWakeSpreadH {
 		out = append(out, fmt.Sprintf("разброс подъёма %.1f ч при пороге %.1f", s.Wake.Spread(), cfg.MaxWakeSpreadH))
-	}
-	if s.Protein.N() > 0 && s.Protein.Avg() < float64(cfg.MinProteinG) {
-		out = append(out, fmt.Sprintf("средний белок %.0f г при норме ≥%d г", s.Protein.Avg(), cfg.MinProteinG))
 	}
 	if rate, ok := s.Main().SavingsRate(); ok && rate < cfg.MinSavingsRate {
 		out = append(out, fmt.Sprintf("норма сбережений %.0f%% при норме ≥%.0f%%", rate*100, cfg.MinSavingsRate*100))
