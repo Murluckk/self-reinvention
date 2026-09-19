@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -58,6 +59,39 @@ func TestGetDayMissingReturnsEmpty(t *testing.T) {
 	}
 	if d.Date != "2026-01-01" || !d.Empty() {
 		t.Fatalf("ожидалась пустая запись, получено %+v", d)
+	}
+}
+
+func TestMigrationConvertsFivePointRatingsOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE days (
+		date TEXT PRIMARY KEY, updated_at TEXT, focus INTEGER, mood INTEGER, energy INTEGER);
+		INSERT INTO days (date, focus, mood, energy) VALUES ('2026-08-24', 3, 4, 5)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		st, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, err := st.GetDay("2026-08-24")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Focus == nil || *d.Focus != 6 || d.Mood == nil || *d.Mood != 8 || d.Energy == nil || *d.Energy != 10 {
+			t.Fatalf("попытка %d: оценки %+v", attempt+1, d)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

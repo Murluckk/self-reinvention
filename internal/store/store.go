@@ -82,6 +82,8 @@ func (s *Store) migrate() error {
 			ts TEXT NOT NULL, date TEXT NOT NULL, raw TEXT NOT NULL,
 			parsed TEXT NOT NULL DEFAULT '', level TEXT NOT NULL DEFAULT '')`,
 		`CREATE TABLE IF NOT EXISTS jobs (name TEXT PRIMARY KEY, last_run TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS schema_migrations (
+			name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS notes_date ON notes(date)`,
 		`CREATE INDEX IF NOT EXISTS money_date ON money(date)`,
 	}
@@ -103,7 +105,40 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("добавление колонки %s: %w", f.DB, err)
 		}
 	}
-	return nil
+	return s.migrateRatingsToTen()
+}
+
+// migrateRatingsToTen один раз переводит исторические оценки 1..5 в 2..10.
+// Маркер нужен обязательно: без него каждый рестарт повторно умножал бы данные.
+func (s *Store) migrateRatingsToTen() error {
+	const name = "ratings_1_to_10"
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var applied int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE name=?", name).Scan(&applied); err != nil {
+		return err
+	}
+	if applied > 0 {
+		return tx.Commit()
+	}
+	if _, err := tx.Exec(`
+		UPDATE days SET
+			focus = CASE WHEN focus BETWEEN 1 AND 5 THEN focus * 2 ELSE focus END,
+			mood = CASE WHEN mood BETWEEN 1 AND 5 THEN mood * 2 ELSE mood END,
+			energy = CASE WHEN energy BETWEEN 1 AND 5 THEN energy * 2 ELSE energy END`); err != nil {
+		return fmt.Errorf("миграция оценок на шкалу 1-10: %w", err)
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO schema_migrations (name, applied_at) VALUES (?,?)",
+		name, time.Now().UTC().Format(time.RFC3339),
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) columns(table string) (map[string]bool, error) {
