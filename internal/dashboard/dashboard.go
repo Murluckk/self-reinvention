@@ -244,7 +244,7 @@ func (d *Dashboard) page(userID int64, period int, selectedDate string) (*pageDa
 	if profile == "" {
 		profile = config.ProfilePasha
 	}
-	to := d.cfg.Today()
+	to := d.cfg.TodayFor(userID)
 	from := report.AddDays(to, -(period - 1))
 	days, err := d.st.Days(userID, from, to)
 	if err != nil {

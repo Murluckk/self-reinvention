@@ -31,3 +31,23 @@ func TestParseUsersRejectsDuplicates(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadAssignsProfileTimezones(t *testing.T) {
+	t.Setenv("BOT_TOKEN", "test-token")
+	t.Setenv("OWNER_ID", "949465743")
+	t.Setenv("TZ", "UTC")
+	t.Setenv("TRACKER_USERS",
+		"949465743:Паша:pasha:owner:x,908821693:Света:sveta:friend:y")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pasha, _ := cfg.User(949465743)
+	sveta, _ := cfg.User(908821693)
+	if pasha.Timezone != "Asia/Vladivostok" || sveta.Timezone != "Asia/Irkutsk" {
+		t.Fatalf("Паша=%q Света=%q", pasha.Timezone, sveta.Timezone)
+	}
+	if cfg.DailyReminder != "22:00" {
+		t.Fatalf("время напоминания %q", cfg.DailyReminder)
+	}
+}

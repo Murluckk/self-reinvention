@@ -99,6 +99,33 @@ func TestDayOfMonthFilter(t *testing.T) {
 	}
 }
 
+func TestJobsUsePerUserTimezone(t *testing.T) {
+	cfg, st := setup(t)
+	vladivostok, err := time.LoadLocation("Asia/Vladivostok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	irkutsk, err := time.LoadLocation("Asia/Irkutsk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pashaRuns, svetaRuns := 0, 0
+	s := New(cfg, st, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Job{Name: "pasha", At: "22:00", Location: vladivostok, Run: func(context.Context) error { pashaRuns++; return nil }},
+		Job{Name: "sveta", At: "22:00", Location: irkutsk, Run: func(context.Context) error { svetaRuns++; return nil }},
+	)
+	// 12:30 UTC — уже 22:30 во Владивостоке, но только 20:30 в Иркутске.
+	s.tickAt(context.Background(), time.Date(2026, 9, 20, 12, 30, 0, 0, time.UTC))
+	if pashaRuns != 1 || svetaRuns != 0 {
+		t.Fatalf("Паша=%d Света=%d", pashaRuns, svetaRuns)
+	}
+	// 14:30 UTC — 22:30 в Иркутске; Пашино напоминание не дублируется.
+	s.tickAt(context.Background(), time.Date(2026, 9, 20, 14, 30, 0, 0, time.UTC))
+	if pashaRuns != 1 || svetaRuns != 1 {
+		t.Fatalf("после Иркутска Паша=%d Света=%d", pashaRuns, svetaRuns)
+	}
+}
+
 func TestMinutes(t *testing.T) {
 	if v, err := minutes("23:00"); err != nil || v != 1380 {
 		t.Fatalf("%d %v", v, err)

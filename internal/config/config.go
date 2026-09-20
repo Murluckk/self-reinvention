@@ -15,6 +15,8 @@ type User struct {
 	TelegramID        int64
 	Name              string
 	Profile           string
+	Timezone          string
+	Location          *time.Location
 	DashboardUser     string
 	DashboardPassword string
 }
@@ -83,7 +85,7 @@ func Load() (*Config, error) {
 		DailyBackup:    env("DAILY_BACKUP", "04:00"),
 		MaxWakeSpreadH: envFloat("MAX_WAKE_SPREAD_H", 1.5),
 		MinSavingsRate: envFloat("MIN_SAVINGS_RATE", 0.55),
-		DailyReminder:  env("DAILY_REMINDER", "23:00"),
+		DailyReminder:  env("DAILY_REMINDER", "22:00"),
 		WeeklyReport:   env("WEEKLY_REPORT", "12:40"),
 		WeeklyWeekday:  time.Sunday,
 		WeeklyReportN:  envInt("WEEKLY_REPORT_DAYS", 7),
@@ -123,6 +125,18 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("не знаю часовой пояс %q: %w", tz, err)
 	}
 	c.Location = loc
+	for i := range c.Users {
+		zone := env("PASHA_TZ", "Asia/Vladivostok")
+		if c.Users[i].Profile == ProfileSveta {
+			zone = env("SVETA_TZ", "Asia/Irkutsk")
+		}
+		userLoc, err := time.LoadLocation(zone)
+		if err != nil {
+			return nil, fmt.Errorf("не знаю часовой пояс пользователя %s %q: %w", c.Users[i].Name, zone, err)
+		}
+		c.Users[i].Timezone = zone
+		c.Users[i].Location = userLoc
+	}
 	return c, nil
 }
 
@@ -156,6 +170,18 @@ func (c *Config) Now() time.Time { return time.Now().In(c.Location) }
 
 // Today возвращает сегодняшнюю дату в формате YYYY-MM-DD.
 func (c *Config) Today() string { return c.Now().Format("2006-01-02") }
+
+// NowFor и TodayFor возвращают локальное время конкретного пользователя.
+func (c *Config) NowFor(id int64) time.Time {
+	if user, ok := c.User(id); ok && user.Location != nil {
+		return time.Now().In(user.Location)
+	}
+	return c.Now()
+}
+
+func (c *Config) TodayFor(id int64) string {
+	return c.NowFor(id).Format("2006-01-02")
+}
 
 // User возвращает настройки разрешённого Telegram-пользователя.
 func (c *Config) User(id int64) (User, bool) {

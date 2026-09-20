@@ -59,7 +59,7 @@ func main() {
 		jobID := strconv.FormatInt(userID, 10)
 		jobs = append(jobs,
 			scheduler.Job{
-				Name: "daily_reminder:" + jobID, At: cfg.DailyReminder,
+				Name: "daily_reminder:" + jobID, At: cfg.DailyReminder, Location: user.Location,
 				Run: func(ctx context.Context) error { return b.RemindDay(ctx, userID) },
 			},
 			scheduler.Job{

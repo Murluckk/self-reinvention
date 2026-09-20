@@ -82,7 +82,7 @@ func (b *Bot) handleVoice(ctx context.Context, userID int64, m *tg.Message, v *t
 		return
 	}
 
-	date := b.cfg.Today()
+	date := b.today(userID)
 	res := parse.ParseVoiceRegex(text, date)
 	// Каждую расшифровку отдаём LLM; регулярки остаются быстрым фолбэком на
 	// случай недоступности API и дополняют пропущенные моделью поля.
@@ -209,8 +209,8 @@ func ext(path string) string {
 // его id, так что расшифровать можно будет позже.
 func (b *Bot) saveUnrecognized(userID int64, v *tg.Voice, cause error) string {
 	n := &model.Note{
-		TS:   b.cfg.Now(),
-		Date: b.cfg.Today(),
+		TS:   b.now(userID),
+		Date: b.today(userID),
 		Tag:  "нераспознано",
 		Text: fmt.Sprintf("голосовое %d сек, распознать не удалось (%v); file_id=%s", v.Duration, cause, v.FileID),
 	}
@@ -319,7 +319,7 @@ func (b *Bot) applyVoice(p *pending) string {
 		}
 	}
 	for _, m := range v.Money {
-		m.TS = b.cfg.Now()
+		m.TS = b.now(p.userID)
 		if err := b.st.AddMoney(p.userID, m); err != nil {
 			b.log.Error("запись денег из голосового", "err", err)
 			out = append(out, "⚠️ деньги не сохранились: "+err.Error())
@@ -328,7 +328,7 @@ func (b *Bot) applyVoice(p *pending) string {
 		out = append(out, "💰 "+parse.FormatMoney(m))
 	}
 	if note := strings.TrimSpace(v.Note); note != "" {
-		n := &model.Note{TS: b.cfg.Now(), Date: b.cfg.Today(), Text: note}
+		n := &model.Note{TS: b.now(p.userID), Date: b.today(p.userID), Text: note}
 		if err := b.st.AddNote(p.userID, n); err != nil {
 			b.log.Error("запись заметки из голосового", "err", err)
 			out = append(out, "⚠️ заметка не сохранилась: "+err.Error())

@@ -145,6 +145,9 @@ func (b *Bot) profile(userID int64) string {
 	return config.ProfilePasha
 }
 
+func (b *Bot) now(userID int64) time.Time { return b.cfg.NowFor(userID) }
+func (b *Bot) today(userID int64) string  { return b.cfg.TodayFor(userID) }
+
 // stats собирает агрегаты за период; общий код для /s, /w и планировщика.
 func (b *Bot) stats(userID int64, from, to string) (*report.Stats, error) {
 	days, err := b.st.Days(userID, from, to)
@@ -173,7 +176,7 @@ func (b *Bot) stats(userID int64, from, to string) (*report.Stats, error) {
 		Days: days, DaysAll: daysAll,
 		Money: money, MoneyAll: moneyAll,
 		Notes:   notes,
-		Today:   b.cfg.Today(),
+		Today:   b.today(userID),
 		Cfg:     b.cfg,
 		Profile: b.profile(userID),
 	}), nil
