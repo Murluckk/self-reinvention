@@ -18,7 +18,7 @@ type Kind string
 const (
 	KindFloat  Kind = "float"  // произвольное дробное число
 	KindInt    Kind = "int"    // целое
-	KindScale  Kind = "scale"  // целое 1..5
+	KindScale  Kind = "scale"  // целое 1..10
 	KindBool   Kind = "bool"   // да/нет
 	KindString Kind = "string" // произвольная строка
 	KindTime   Kind = "time"   // время суток HH:MM
@@ -36,15 +36,13 @@ type Day struct {
 	Workout  *string  `db:"workout"  key:"трен,тренировка,workout"  kind:"string" label:"Тренировка"            desc:"тип тренировки: зал, бег, улица или нет"`
 	Weight   *float64 `db:"weight"   key:"вес,weight"               kind:"float"  label:"Вес"        unit:"кг" desc:"вес тела в килограммах"`
 	English  *int     `db:"english"  key:"англ,английский,english"  kind:"int"    label:"Английский" unit:"мин" desc:"минут английского"`
-	Kcal     *int     `db:"kcal"     key:"ккал,калории,kcal"        kind:"int"    label:"Калории"    unit:"ккал" desc:"съедено килокалорий"`
-	Protein  *int     `db:"protein"  key:"белок,protein"            kind:"int"    label:"Белок"      unit:"г"  desc:"съедено белка в граммах"`
 	Cooked   *bool    `db:"cooked"   key:"готовил,cooked"           kind:"bool"   label:"Готовил"               desc:"готовил ли еду сам"`
 	Work     *float64 `db:"work"     key:"работа,work"              kind:"float"  label:"Работа"     unit:"ч"  desc:"часов работы"`
 	DayOff   *bool    `db:"day_off"  key:"выходной,dayoff"          kind:"bool"   label:"Выходной"              desc:"полный день без работы"`
 	Shift    *bool    `db:"shift"    key:"смена,shift"              kind:"bool"   label:"Смена"                 desc:"оплачиваемый рабочий выходной"`
-	Focus    *int     `db:"focus"    key:"фокус,focus"              kind:"scale"  label:"Фокус"                 desc:"концентрация по шкале 1-5"`
-	Mood     *int     `db:"mood"     key:"настроение,mood"          kind:"scale"  label:"Настроение"            desc:"настроение по шкале 1-5"`
-	Energy   *int     `db:"energy"   key:"энергия,energy"           kind:"scale"  label:"Энергия"               desc:"энергия по шкале 1-5"`
+	Focus    *int     `db:"focus"    key:"фокус,focus"              kind:"scale"  label:"Фокус"                 desc:"концентрация по шкале 1-10"`
+	Mood     *int     `db:"mood"     key:"настроение,mood"          kind:"scale"  label:"Настроение"            desc:"настроение по шкале 1-10"`
+	Energy   *int     `db:"energy"   key:"энергия,energy"           kind:"scale"  label:"Энергия"               desc:"энергия по шкале 1-10"`
 	Telegram *int     `db:"telegram" key:"тг,телеграм,tg"           kind:"int"    label:"Телеграм"              desc:"сколько раз залезал в телеграм вне разрешённых окон"`
 	Clean    *bool    `db:"clean"    key:"чисто,clean"              kind:"bool"   label:"Чисто"                 desc:"день без алкоголя и без порно"`
 	Note     *string  `db:"note"     key:"note,заметка,коммент"     kind:"string" label:"Заметка"               desc:"свободный комментарий к дню" rest:"true"`
@@ -162,8 +160,8 @@ func (f *Field) SetAny(d *Day, v any) error {
 		if x < 0 {
 			n = int(x - 0.5)
 		}
-		if f.Kind == KindScale && (n < 1 || n > 5) {
-			return fmt.Errorf("ожидалось число от 1 до 5, а не %d", n)
+		if f.Kind == KindScale && (n < 1 || n > 10) {
+			return fmt.Errorf("ожидалось число от 1 до 10, а не %d", n)
 		}
 		f.set(d, reflect.ValueOf(n))
 	case KindBool:

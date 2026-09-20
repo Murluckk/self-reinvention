@@ -20,12 +20,13 @@ import (
 
 // Bot — главный объект приложения.
 type Bot struct {
-	cfg *config.Config
-	tg  *tg.Client
-	st  *store.Store
-	asr *asr.Client
-	llm *llm.Client
-	log *slog.Logger
+	cfg         *config.Config
+	tg          *tg.Client
+	st          *store.Store
+	asr         *asr.Client
+	asrFallback *asr.Client
+	llm         *llm.Client
+	log         *slog.Logger
 
 	mu      sync.Mutex
 	pending map[string]*pending
@@ -33,8 +34,11 @@ type Bot struct {
 }
 
 // New собирает бота из готовых зависимостей.
-func New(cfg *config.Config, client *tg.Client, st *store.Store, a *asr.Client, l *llm.Client, log *slog.Logger) *Bot {
-	return &Bot{cfg: cfg, tg: client, st: st, asr: a, llm: l, log: log, pending: map[string]*pending{}}
+func New(cfg *config.Config, client *tg.Client, st *store.Store, a, fallback *asr.Client, l *llm.Client, log *slog.Logger) *Bot {
+	return &Bot{
+		cfg: cfg, tg: client, st: st, asr: a, asrFallback: fallback,
+		llm: l, log: log, pending: map[string]*pending{},
+	}
 }
 
 // Run крутит long polling до отмены контекста.
@@ -95,12 +99,12 @@ func (b *Bot) handleUpdate(ctx context.Context, u *tg.Update) {
 		if !b.owns(u.CallbackQuery.From) {
 			return
 		}
-		b.handleCallback(ctx, u.CallbackQuery)
+		b.handleCallback(ctx, u.CallbackQuery.From.ID, u.CallbackQuery)
 	case u.Message != nil:
 		if !b.owns(u.Message.From) {
 			return
 		}
-		b.handleMessage(ctx, u.Message)
+		b.handleMessage(ctx, u.Message.From.ID, u.Message)
 	}
 }
 
@@ -110,7 +114,7 @@ func (b *Bot) owns(u *tg.User) bool {
 	if u == nil {
 		return false
 	}
-	if u.ID != b.cfg.OwnerID {
+	if _, ok := b.cfg.User(u.ID); !ok {
 		b.log.Info("игнорирую чужое сообщение", "user_id", u.ID)
 		return false
 	}
@@ -129,31 +133,31 @@ func (b *Bot) reply(ctx context.Context, chatID int64, text string) {
 }
 
 // Notify пишет владельцу — этим пользуется планировщик.
-func (b *Bot) Notify(ctx context.Context, text string) error {
-	_, err := b.tg.SendMessage(ctx, b.cfg.OwnerID, text, nil)
+func (b *Bot) Notify(ctx context.Context, userID int64, text string) error {
+	_, err := b.tg.SendMessage(ctx, userID, text, nil)
 	return err
 }
 
 // stats собирает агрегаты за период; общий код для /s, /w и планировщика.
-func (b *Bot) stats(from, to string) (*report.Stats, error) {
-	days, err := b.st.Days(from, to)
+func (b *Bot) stats(userID int64, from, to string) (*report.Stats, error) {
+	days, err := b.st.Days(userID, from, to)
 	if err != nil {
 		return nil, err
 	}
 	// Стрики считаем по длинному окну, иначе серия в 40 дней покажется семёркой.
-	daysAll, err := b.st.Days(report.AddDays(to, -400), to)
+	daysAll, err := b.st.Days(userID, report.AddDays(to, -400), to)
 	if err != nil {
 		return nil, err
 	}
-	money, err := b.st.Money(from, to)
+	money, err := b.st.Money(userID, from, to)
 	if err != nil {
 		return nil, err
 	}
-	moneyAll, err := b.st.MoneyUntil(to)
+	moneyAll, err := b.st.MoneyUntil(userID, to)
 	if err != nil {
 		return nil, err
 	}
-	notes, err := b.st.Notes(from, to)
+	notes, err := b.st.Notes(userID, from, to)
 	if err != nil {
 		return nil, err
 	}

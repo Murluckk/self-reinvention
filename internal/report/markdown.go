@@ -59,20 +59,6 @@ func Markdown(s *Stats) string {
 	p("- пропусков (включая незаполненные дни): **%d**", s.EnglishSkips)
 	p("")
 
-	p("## Питание")
-	if s.Kcal.N() > 0 {
-		p("- ккал: среднее **%.0f** (за %s)", s.Kcal.Avg(), days(s.Kcal.N()))
-	} else {
-		p("- ккал: нет данных")
-	}
-	if s.Protein.N() > 0 {
-		p("- белок: среднее **%.0f г** (за %s)", s.Protein.Avg(), days(s.Protein.N()))
-	} else {
-		p("- белок: нет данных")
-	}
-	p("- готовил сам: %s", days(s.CookedDays))
-	p("")
-
 	p("## Вес")
 	if s.Weight.N() > 0 {
 		first := s.Weight.Values[0]
@@ -117,10 +103,10 @@ func Markdown(s *Stats) string {
 			continue
 		}
 		if x.s.N() < 4 {
-			p("- %s: среднее **%.1f** (за %s, для динамики мало данных)", x.name, x.s.Avg(), days(x.s.N()))
+			p("- %s: среднее **%.1f/10** (за %s, для динамики мало данных)", x.name, x.s.Avg(), days(x.s.N()))
 			continue
 		}
-		p("- %s: среднее **%.1f**, динамика %+.1f", x.name, x.s.Avg(), x.s.HalfDelta())
+		p("- %s: среднее **%.1f/10**, динамика %+.1f", x.name, x.s.Avg(), x.s.HalfDelta())
 	}
 	p("")
 
@@ -190,7 +176,7 @@ func Markdown(s *Stats) string {
 // dayTable рисует таблицу по дням: она нужна, чтобы на разборе можно было
 // глазами найти конкретный день, а не только средние.
 func dayTable(days []*model.Day) string {
-	cols := []string{"sleep", "wake", "workout", "english", "kcal", "protein", "work", "day_off", "clean", "telegram", "mood"}
+	cols := []string{"sleep", "wake", "workout", "english", "work", "day_off", "clean", "telegram", "focus", "mood", "energy"}
 	var fs []model.Field
 	head := []string{"дата", "дн"}
 	for _, c := range cols {

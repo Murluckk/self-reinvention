@@ -1,5 +1,5 @@
-// Команда bot — телеграм-бот личного трекинга. Один пользователь, long polling,
-// SQLite рядом на диске.
+// Команда bot — Telegram-бот личного трекинга с раздельными данными
+// пользователей, long polling и SQLite рядом на диске.
 package main
 
 import (
@@ -14,6 +14,7 @@ import (
 	"github.com/murluckk/self-reinvention/internal/asr"
 	"github.com/murluckk/self-reinvention/internal/bot"
 	"github.com/murluckk/self-reinvention/internal/config"
+	"github.com/murluckk/self-reinvention/internal/dashboard"
 	"github.com/murluckk/self-reinvention/internal/llm"
 	"github.com/murluckk/self-reinvention/internal/scheduler"
 	"github.com/murluckk/self-reinvention/internal/store"
@@ -29,20 +30,44 @@ func main() {
 		log.Error("конфигурация", "err", err)
 		os.Exit(1)
 	}
-	st, err := store.Open(cfg.DataPath)
+	st, err := store.Open(cfg.DataPath, cfg.OwnerID)
 	if err != nil {
 		log.Error("хранилище", "err", err)
 		os.Exit(1)
 	}
 	defer st.Close()
 
-	b := bot.New(cfg, tg.New(cfg.BotToken), st, asr.New(cfg.ASRURL), llm.New(cfg.OllamaURL, cfg.OllamaModel), log)
+	llmClient := llm.New(cfg.OllamaURL, cfg.OllamaModel)
+	if cfg.LLMAPIKey != "" {
+		llmClient = llm.NewOpenAI(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel)
+	}
+	localASR := asr.New(cfg.ASRURL)
+	primaryASR, fallbackASR := localASR, (*asr.Client)(nil)
+	if cfg.LLMAPIKey != "" {
+		primaryASR = asr.NewOpenAI(
+			cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.TranscribeModel, cfg.TranscribePrompt,
+		)
+		fallbackASR = localASR
+	}
+	b := bot.New(cfg, tg.New(cfg.BotToken), st, primaryASR, fallbackASR, llmClient, log)
 
 	sunday := cfg.WeeklyWeekday
-	sch := scheduler.New(cfg, st, log,
-		scheduler.Job{Name: "daily_reminder", At: cfg.DailyReminder, Run: b.RemindDay},
-		scheduler.Job{Name: "weekly_report", At: cfg.WeeklyReport, Weekday: &sunday, Run: b.SendWeekly},
-	)
+	var jobs []scheduler.Job
+	for _, user := range cfg.Users {
+		userID := user.TelegramID
+		jobs = append(jobs,
+			scheduler.Job{
+				Name: "daily_reminder:" + user.DashboardUser, At: cfg.DailyReminder,
+				Run: func(ctx context.Context) error { return b.RemindDay(ctx, userID) },
+			},
+			scheduler.Job{
+				Name: "weekly_report:" + user.DashboardUser, At: cfg.WeeklyReport, Weekday: &sunday,
+				Run: func(ctx context.Context) error { return b.SendWeekly(ctx, userID) },
+			},
+		)
+	}
+	jobs = append(jobs, scheduler.Job{Name: "daily_backup", At: cfg.DailyBackup, Run: b.SendBackup})
+	sch := scheduler.New(cfg, st, log, jobs...)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -59,8 +84,18 @@ func main() {
 			log.Error("бот остановился", "err", err)
 		}
 	}()
+	if cfg.DashboardAddr != "" {
+		dash := dashboard.New(cfg, st, log)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := dash.Run(ctx); err != nil {
+				log.Error("дашборд остановился", "err", err)
+			}
+		}()
+	}
 
-	log.Info("запустился", "owner", cfg.OwnerID, "tz", cfg.Location.String(), "data", cfg.DataPath)
+	log.Info("запустился", "users", len(cfg.Users), "tz", cfg.Location.String(), "data", cfg.DataPath)
 	<-ctx.Done()
 	log.Info("получил сигнал, останавливаюсь")
 

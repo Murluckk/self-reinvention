@@ -36,3 +36,16 @@ func TestSplitCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestCloudAudioNameUsesSupportedOggExtension(t *testing.T) {
+	cases := map[string]string{
+		"voice/file_123.oga": "file_123.ogg",
+		"voice/file_123.ogg": "file_123.ogg",
+		"":                   "voice.ogg",
+	}
+	for in, want := range cases {
+		if got := cloudAudioName(in); got != want {
+			t.Errorf("%q -> %q, ожидалось %q", in, got, want)
+		}
+	}
+}
