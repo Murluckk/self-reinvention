@@ -8,192 +8,118 @@ import (
 	"github.com/murluckk/self-reinvention/internal/model"
 )
 
-func f(v float64) *float64 { return &v }
-func i(v int) *int         { return &v }
-func s(v string) *string   { return &v }
-func bp(v bool) *bool      { return &v }
+func ip(v int) *int       { return &v }
+func bp(v bool) *bool     { return &v }
+func sp(v string) *string { return &v }
 
-func testCfg() *config.Config {
-	return &config.Config{
-		MinFullDaysOff30:    4,
-		MaxStreakNoDayOff:   12,
-		MaxEnglishSkipsWeek: 1,
-		MinSleepAvg:         7.0,
-		MaxWakeSpreadH:      1.5,
-		MinProteinG:         110,
-		MinSavingsRate:      0.55,
-	}
-}
-
-// week строит семь дней 2026-08-18..2026-08-24 с предсказуемыми значениями.
-func week() []*model.Day {
+func trackerDays() []*model.Day {
 	return []*model.Day{
-		{Date: "2026-08-18", Sleep: f(7), Wake: s("07:00"), Workout: s("зал"), English: i(40), Kcal: i(2100), Protein: i(120), Work: f(8), Clean: bp(true), Weight: f(74), Telegram: i(3), Focus: i(4), Mood: i(4), Energy: i(4), Cooked: bp(true)},
-		{Date: "2026-08-19", Sleep: f(6), Wake: s("07:30"), Workout: s("бег"), English: i(30), Kcal: i(1900), Protein: i(100), Work: f(9), Clean: bp(true), Telegram: i(5), Focus: i(3), Mood: i(3), Energy: i(3)},
-		{Date: "2026-08-20", Sleep: f(8), Wake: s("08:00"), Workout: s("нет"), English: i(0), Kcal: i(2300), Protein: i(90), Work: f(7), Clean: bp(false), Telegram: i(8), Focus: i(2), Mood: i(2), Energy: i(2)},
-		{Date: "2026-08-21", Sleep: f(7.5), Wake: s("07:15"), Workout: s("зал"), English: i(45), Protein: i(130), Work: f(8), Clean: bp(true), Shift: bp(true), Focus: i(4), Mood: i(4), Energy: i(5), Cooked: bp(true)},
-		{Date: "2026-08-22", Sleep: f(9), Wake: s("09:30"), English: i(20), Work: f(0), DayOff: bp(true), Clean: bp(true), Focus: i(5), Mood: i(5), Energy: i(5)},
-		{Date: "2026-08-23", Sleep: f(7), Wake: s("07:45"), Workout: s("улица"), English: i(60), Protein: i(140), Work: f(4), Clean: bp(true), Weight: f(73.2), Cooked: bp(true)},
-		{Date: "2026-08-24", Sleep: f(6.5), Wake: s("07:00"), Workout: s("зал"), English: i(35), Work: f(8), Clean: bp(true), Telegram: i(2)},
+		{Date: "2026-08-18", Wake: sp("07:00"), Bed: sp("23:30"), Algorithms: ip(40), SystemDesign: ip(30), Workout: bp(true), Mood: ip(8)},
+		{Date: "2026-08-19", Wake: sp("07:30"), Bed: sp("23:45"), Algorithms: ip(30), SystemDesign: ip(45), Workout: bp(true), Mood: ip(6)},
+		{Date: "2026-08-20", Wake: sp("08:00"), Bed: sp("00:15"), Algorithms: ip(0), SystemDesign: ip(0), Workout: bp(false), Mood: ip(5)},
+		{Date: "2026-08-21", Wake: sp("07:15"), Bed: sp("23:20"), Algorithms: ip(45), SystemDesign: ip(30), Workout: bp(true), Mood: ip(8)},
+		{Date: "2026-08-22", Wake: sp("09:30"), Bed: sp("00:30"), Algorithms: ip(20), SystemDesign: ip(0), Workout: bp(false), Mood: ip(9)},
+		{Date: "2026-08-23", Wake: sp("07:45"), Bed: sp("23:50"), Algorithms: ip(60), SystemDesign: ip(40), Workout: bp(true), Mood: ip(8)},
+		{Date: "2026-08-24", Wake: sp("07:00"), Bed: sp("23:10"), Algorithms: ip(35), SystemDesign: ip(30), Workout: bp(true), Mood: ip(7)},
 	}
 }
 
-func build(t *testing.T, days []*model.Day, money []*model.Money, notes []*model.Note) *Stats {
-	t.Helper()
+func buildTrackerStats() *Stats {
+	days := trackerDays()
 	return Build(Input{
-		From: "2026-08-18", To: "2026-08-24",
+		From: "2026-08-18", To: "2026-08-24", Today: "2026-08-24",
 		Days: days, DaysAll: days,
-		Money: money, MoneyAll: money,
-		Notes: notes,
-		Today: "2026-08-24",
-		Cfg:   testCfg(),
+		Money: []*model.Money{
+			{Date: "2026-08-19", Kind: model.MoneyIncome, Amount: 250000, Currency: "RUB", Category: "зарплата"},
+			{Date: "2026-08-19", Kind: model.MoneyExpense, Amount: 1200, Currency: "RUB", Category: "еда"},
+			{Date: "2026-08-19", Kind: model.MoneySaving, Amount: 150000, Currency: "RUB", Category: "накопления"},
+		},
+		MoneyAll: []*model.Money{
+			{Date: "2026-08-19", Kind: model.MoneyIncome, Amount: 250000, Currency: "RUB"},
+			{Date: "2026-08-19", Kind: model.MoneyExpense, Amount: 1200, Currency: "RUB"},
+			{Date: "2026-08-19", Kind: model.MoneySaving, Amount: 150000, Currency: "RUB"},
+		},
+		Notes: []*model.Note{{Date: "2026-08-19", Tag: "идея", Text: "заниматься утром"}},
+		Cfg:   &config.Config{MaxWakeSpreadH: 1.5, MinSavingsRate: .55},
 	})
 }
 
-func TestAggregateSleepAndWake(t *testing.T) {
-	st := build(t, week(), nil, nil)
-	if st.FilledDays != 7 || st.TotalDays != 7 {
-		t.Fatalf("заполнено %d из %d", st.FilledDays, st.TotalDays)
+func TestBuildTrackerStats(t *testing.T) {
+	st := buildTrackerStats()
+	if st.FilledDays != 7 || st.Workouts != 5 {
+		t.Fatalf("заполнено=%d тренировки=%d", st.FilledDays, st.Workouts)
 	}
-	if got := st.Sleep.Avg(); got < 7.28 || got > 7.30 {
-		t.Fatalf("средний сон %.3f", got)
+	if st.Algorithms.Sum() != 230 || st.AlgorithmDays != 6 {
+		t.Fatalf("алгоритмы: sum=%.0f days=%d", st.Algorithms.Sum(), st.AlgorithmDays)
 	}
-	if mn, d := st.Sleep.Min(); mn != 6 || d != "2026-08-19" {
-		t.Fatalf("минимум сна %.1f (%s)", mn, d)
+	if st.SystemDesign.Sum() != 175 || st.SystemDesignDays != 5 {
+		t.Fatalf("системный дизайн: sum=%.0f days=%d", st.SystemDesign.Sum(), st.SystemDesignDays)
 	}
-	if mx, d := st.Sleep.Max(); mx != 9 || d != "2026-08-22" {
-		t.Fatalf("максимум сна %.1f (%s)", mx, d)
+	if st.Mood.Avg() != 51.0/7 {
+		t.Fatalf("состояние: %.2f", st.Mood.Avg())
 	}
-	if got := st.Wake.Spread(); got < 2.49 || got > 2.51 {
-		t.Fatalf("разброс подъёма %.3f, ожидалось 2.5", got)
+	if st.Streaks.Algorithms != 4 || st.Streaks.Workout != 2 || st.Streaks.Filled != 7 {
+		t.Fatalf("стрики: %+v", st.Streaks)
 	}
-}
-
-func TestAggregateWorkoutsAndEnglish(t *testing.T) {
-	st := build(t, week(), nil, nil)
-	if st.Workouts != 5 {
-		t.Fatalf("тренировок %d, ожидалось 5 (день «нет» не считается)", st.Workouts)
-	}
-	if st.WorkoutTypes["зал"] != 3 || st.WorkoutTypes["бег"] != 1 || st.WorkoutTypes["улица"] != 1 {
-		t.Fatalf("разбивка по типам: %v", st.WorkoutTypes)
-	}
-	if st.English.Sum() != 230 {
-		t.Fatalf("минут английского %.0f, ожидалось 230", st.English.Sum())
-	}
-	if st.EnglishDays != 6 {
-		t.Fatalf("дней с английским %d, ожидалось 6", st.EnglishDays)
-	}
-	if st.EnglishSkips != 1 {
-		t.Fatalf("пропусков %d, ожидался 1", st.EnglishSkips)
-	}
-}
-
-func TestAggregateWorkAndClean(t *testing.T) {
-	st := build(t, week(), nil, nil)
-	if st.Work.Sum() != 44 {
-		t.Fatalf("часов работы %.1f, ожидалось 44", st.Work.Sum())
-	}
-	if st.Shifts != 1 || st.DaysOff != 1 {
-		t.Fatalf("смен %d, выходных %d", st.Shifts, st.DaysOff)
-	}
-	// 18-21 подряд без выходного, 22-е — полный выходной, дальше 23-24
-	if st.MaxNoDayOff != 4 {
-		t.Fatalf("максимальная серия без выходного %d, ожидалось 4", st.MaxNoDayOff)
-	}
-	if st.CleanDays != 6 || st.CleanKnown != 7 {
-		t.Fatalf("чистых %d из %d", st.CleanDays, st.CleanKnown)
-	}
-	if len(st.CleanFails) != 1 || st.CleanFails[0] != "2026-08-20" {
-		t.Fatalf("срывы: %v", st.CleanFails)
-	}
-}
-
-func TestAggregateWeightDelta(t *testing.T) {
-	st := build(t, week(), nil, nil)
-	if got := st.Weight.Delta(); got < -0.81 || got > -0.79 {
-		t.Fatalf("дельта веса %.2f, ожидалось -0.8", got)
-	}
-}
-
-func TestAggregateNutrition(t *testing.T) {
-	st := build(t, week(), nil, nil)
-	if got := st.Kcal.Avg(); got != 2100 {
-		t.Fatalf("средние ккал %.0f", got)
-	}
-	if got := st.Protein.Avg(); got != 116 {
-		t.Fatalf("средний белок %.0f", got)
-	}
-	if st.CookedDays != 3 {
-		t.Fatalf("дней готовки %d", st.CookedDays)
-	}
-}
-
-func TestAggregateMoney(t *testing.T) {
-	money := []*model.Money{
-		{Date: "2026-08-18", Kind: model.MoneyIncome, Amount: 250000, Currency: "RUB", Category: "зп"},
-		{Date: "2026-08-19", Kind: model.MoneyExpense, Amount: 1200, Currency: "RUB", Category: "еда"},
-		{Date: "2026-08-19", Kind: model.MoneySaving, Amount: 150000, Currency: "RUB", Category: "накопления"},
-		{Date: "2026-08-20", Kind: model.MoneySaving, Amount: 5000, Currency: "USD", Category: "кошелёк"},
-	}
-	st := build(t, week(), money, nil)
 	rub := st.Currencies["RUB"]
-	if rub.Income != 250000 || rub.Expense != 1200 || rub.Saved != 150000 || rub.Capital != 150000 {
-		t.Fatalf("рубли: %+v", rub)
-	}
-	rate, ok := rub.SavingsRate()
-	if !ok || rate < 0.59 || rate > 0.61 {
-		t.Fatalf("норма сбережений %.3f", rate)
-	}
-	if st.Currencies["USD"].Capital != 5000 {
-		t.Fatalf("доллары: %+v", st.Currencies["USD"])
-	}
-	if st.CurOrder[0] != "RUB" {
-		t.Fatalf("порядок валют %v, рубли должны идти первыми", st.CurOrder)
+	if rub == nil || rub.Income != 250000 || rub.Expense != 1200 || rub.Saved != 150000 || rub.Capital != 150000 {
+		t.Fatalf("финансы: %+v", rub)
 	}
 }
 
-func TestFlags(t *testing.T) {
-	st := build(t, week(), nil, nil)
-	joined := strings.Join(st.Flags, "\n")
-	for _, want := range []string{"полных выходных за 30 дней", "разброс подъёма", "чистых дней"} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("ожидал флаг %q, получил:\n%s", want, joined)
-		}
-	}
-	// сон 7.29 и белок 116 в норме — флагов по ним быть не должно
-	for _, unwanted := range []string{"средний сон", "средний белок", "пропусков английского"} {
-		if strings.Contains(joined, unwanted) {
-			t.Fatalf("лишний флаг %q:\n%s", unwanted, joined)
-		}
-	}
-}
-
-func TestFlagsSavingsRate(t *testing.T) {
-	money := []*model.Money{
-		{Date: "2026-08-18", Kind: model.MoneyIncome, Amount: 100000, Currency: "RUB", Category: "зп"},
-		{Date: "2026-08-19", Kind: model.MoneySaving, Amount: 10000, Currency: "RUB", Category: "накопления"},
-	}
-	st := build(t, week(), money, nil)
-	if !strings.Contains(strings.Join(st.Flags, "\n"), "норма сбережений 10%") {
-		t.Fatalf("ожидал флаг по норме сбережений, получил %v", st.Flags)
-	}
-}
-
-func TestMarkdownIsSelfContained(t *testing.T) {
-	notes := []*model.Note{
-		{Date: "2026-08-19", Tag: "идея", Text: "перенести тренировки на утро"},
-		{Date: "2026-08-20", Text: "тяжёлый день"},
-	}
-	md := Markdown(build(t, week(), nil, notes))
-	for _, want := range []string{
-		"# Разбор: 2026-08-18 — 2026-08-24",
-		"## Сон", "## Тренировки", "## Английский", "## Питание", "## Вес",
-		"## Работа", "## Чистые дни", "## Телеграм вне окон", "## Состояние",
-		"## Деньги", "## Стрики", "## Флаги", "## По дням", "## Заметки",
-		"перенести тренировки на утро", "тяжёлый день", "#идея",
-	} {
+func TestMarkdownUsesSimplifiedSchema(t *testing.T) {
+	md := Markdown(buildTrackerStats())
+	for _, want := range []string{"## Режим", "## Развитие", "Алгоритмы", "Системный дизайн", "## Тренировки", "## Деньги", "заниматься утром"} {
 		if !strings.Contains(md, want) {
-			t.Fatalf("в выгрузке нет %q", want)
+			t.Errorf("нет %q:\n%s", want, md)
 		}
+	}
+	for _, removed := range []string{"## Английский", "## Вес", "## Чистые дни"} {
+		if strings.Contains(md, removed) {
+			t.Errorf("остался удалённый раздел %q", removed)
+		}
+	}
+}
+
+func TestStatusContainsCapitalAndLearning(t *testing.T) {
+	st := buildTrackerStats()
+	text := Status(st.Days[len(st.Days)-1], st)
+	for _, want := range []string{"Капитал", "алгоритмы", "системный дизайн", "Состояние"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("нет %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestSvetaProfileReport(t *testing.T) {
+	days := []*model.Day{
+		{Date: "2026-08-22", Wake: sp("08:00"), Workout: bp(true), Walk: bp(true), Study: bp(true), Useful: sp("литература"), Mood: ip(8), Sweet: bp(false), Alcohol: bp(false)},
+		{Date: "2026-08-23", Wake: sp("08:30"), Workout: bp(false), Walk: bp(true), Study: bp(true), Useful: sp("обучающее видео"), Mood: ip(7), Sweet: bp(true), Alcohol: bp(false)},
+		{Date: "2026-08-24", Wake: sp("08:15"), Workout: bp(true), Walk: bp(true), Study: bp(false), Useful: sp("книга"), Mood: ip(9), Sweet: bp(false), Alcohol: bp(true)},
+	}
+	st := Build(Input{
+		From: "2026-08-22", To: "2026-08-24", Today: "2026-08-24",
+		Days: days, DaysAll: days, Profile: config.ProfileSveta,
+		Cfg: &config.Config{MaxWakeSpreadH: 1.5, MinSavingsRate: .55},
+	})
+	if st.FilledDays != 3 || st.Walks != 3 || st.StudyDays != 2 || st.UsefulDays != 3 ||
+		st.SweetDays != 1 || st.SweetKnown != 3 || st.AlcoholDays != 1 || st.AlcoholKnown != 3 {
+		t.Fatalf("статистика Светы: %+v", st)
+	}
+	if st.Streaks.Walk != 3 || st.Streaks.Study != 0 || st.Streaks.Useful != 3 {
+		t.Fatalf("стрики Светы: %+v", st.Streaks)
+	}
+	md := Markdown(st)
+	for _, want := range []string{"## Активность и развитие", "прогулки", "учёба", "## Питание", "сладкое", "алкоголь", "Полезное занятие"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("нет %q:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, "## Деньги") || strings.Contains(md, "алгоритмы") {
+		t.Fatalf("в отчёт Светы попал профиль Паши:\n%s", md)
+	}
+	status := Status(days[len(days)-1], st)
+	if strings.Contains(status, "Капитал") || !strings.Contains(status, "прогулок") {
+		t.Fatalf("неверный статус Светы:\n%s", status)
 	}
 }

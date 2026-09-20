@@ -16,12 +16,13 @@ import (
 type Kind string
 
 const (
-	KindFloat  Kind = "float"  // произвольное дробное число
-	KindInt    Kind = "int"    // целое
-	KindScale  Kind = "scale"  // целое 1..5
-	KindBool   Kind = "bool"   // да/нет
-	KindString Kind = "string" // произвольная строка
-	KindTime   Kind = "time"   // время суток HH:MM
+	KindFloat    Kind = "float"    // произвольное дробное число
+	KindInt      Kind = "int"      // целое
+	KindDuration Kind = "duration" // минуты занятия; 0 означает «не занимался»
+	KindScale    Kind = "scale"    // целое 1..10
+	KindBool     Kind = "bool"     // да/нет
+	KindString   Kind = "string"   // произвольная строка
+	KindTime     Kind = "time"     // время суток HH:MM
 )
 
 // Day — запись за один день. Все поля, кроме даты, опциональны: запись
@@ -30,37 +31,32 @@ const (
 type Day struct {
 	Date string `db:"date"`
 
-	Sleep    *float64 `db:"sleep"    key:"сон,спал,sleep"          kind:"float"  label:"Сон"        unit:"ч"   desc:"часы сна за ночь"`
-	Wake     *string  `db:"wake"     key:"подъем,подъём,встал,wake" kind:"time"   label:"Подъём"                desc:"время подъёма, HH:MM"`
-	Bed      *string  `db:"bed"      key:"отбой,лег,лёг,bed"        kind:"time"   label:"Отбой"                 desc:"время отбоя, HH:MM"`
-	Workout  *string  `db:"workout"  key:"трен,тренировка,workout"  kind:"string" label:"Тренировка"            desc:"тип тренировки: зал, бег, улица или нет"`
-	Weight   *float64 `db:"weight"   key:"вес,weight"               kind:"float"  label:"Вес"        unit:"кг" desc:"вес тела в килограммах"`
-	English  *int     `db:"english"  key:"англ,английский,english"  kind:"int"    label:"Английский" unit:"мин" desc:"минут английского"`
-	Kcal     *int     `db:"kcal"     key:"ккал,калории,kcal"        kind:"int"    label:"Калории"    unit:"ккал" desc:"съедено килокалорий"`
-	Protein  *int     `db:"protein"  key:"белок,protein"            kind:"int"    label:"Белок"      unit:"г"  desc:"съедено белка в граммах"`
-	Cooked   *bool    `db:"cooked"   key:"готовил,cooked"           kind:"bool"   label:"Готовил"               desc:"готовил ли еду сам"`
-	Work     *float64 `db:"work"     key:"работа,work"              kind:"float"  label:"Работа"     unit:"ч"  desc:"часов работы"`
-	DayOff   *bool    `db:"day_off"  key:"выходной,dayoff"          kind:"bool"   label:"Выходной"              desc:"полный день без работы"`
-	Shift    *bool    `db:"shift"    key:"смена,shift"              kind:"bool"   label:"Смена"                 desc:"оплачиваемый рабочий выходной"`
-	Focus    *int     `db:"focus"    key:"фокус,focus"              kind:"scale"  label:"Фокус"                 desc:"концентрация по шкале 1-5"`
-	Mood     *int     `db:"mood"     key:"настроение,mood"          kind:"scale"  label:"Настроение"            desc:"настроение по шкале 1-5"`
-	Energy   *int     `db:"energy"   key:"энергия,energy"           kind:"scale"  label:"Энергия"               desc:"энергия по шкале 1-5"`
-	Telegram *int     `db:"telegram" key:"тг,телеграм,tg"           kind:"int"    label:"Телеграм"              desc:"сколько раз залезал в телеграм вне разрешённых окон"`
-	Clean    *bool    `db:"clean"    key:"чисто,clean"              kind:"bool"   label:"Чисто"                 desc:"день без алкоголя и без порно"`
-	Note     *string  `db:"note"     key:"note,заметка,коммент"     kind:"string" label:"Заметка"               desc:"свободный комментарий к дню" rest:"true"`
+	Wake         *string `db:"wake"          key:"подъем,подъём,встал,wake"          kind:"time"     label:"Подъём"             desc:"время подъёма, HH:MM"                         profile:"pasha,sveta"`
+	Bed          *string `db:"bed"           key:"отбой,заснул,лег,лёг,bed"           kind:"time"     label:"Заснул"             desc:"время засыпания, HH:MM"                       profile:"pasha,sveta"`
+	Algorithms   *int    `db:"algorithms"    key:"алго,алгоритмы,algorithms"          kind:"duration" label:"Алгоритмы"          desc:"минуты алгоритмов; 0 если не занимался"      profile:"pasha"`
+	SystemDesign *int    `db:"system_design" key:"системы,системдизайн,systemdesign"  kind:"duration" label:"Системный дизайн"   desc:"минуты системного дизайна; 0 если не занимался" profile:"pasha"`
+	Workout      *bool   `db:"workout"       key:"трен,тренировка,workout"            kind:"bool"     label:"Тренировка"         desc:"была ли тренировка"                           profile:"pasha,sveta"`
+	Walk         *bool   `db:"walk"          key:"прогулка,гуляла,walk"               kind:"bool"     label:"Прогулка"           desc:"была ли прогулка"                             profile:"sveta"`
+	Study        *bool   `db:"study"         key:"учеба,учёба,занятия,study"          kind:"bool"     label:"Учёба"              desc:"занималась ли учёбой"                         profile:"sveta"`
+	Useful       *string `db:"useful"        key:"полезное,обучение"                  kind:"string"   label:"Полезное занятие"   desc:"литература, обучающее видео или другое полезное занятие" profile:"sveta" rest:"true"`
+	Mood         *int    `db:"mood"          key:"состояние,настроение,mood"          kind:"scale"    label:"Состояние"          desc:"эмоциональное состояние по шкале 1-10"       profile:"pasha,sveta"`
+	Sweet        *bool   `db:"sweet"         key:"сладкое,сладости,sweet"             kind:"bool"     label:"Сладкое"            desc:"ела ли сладкое"                               profile:"sveta"`
+	Alcohol      *bool   `db:"alcohol"       key:"алкоголь,вино,alcohol"              kind:"bool"     label:"Алкоголь"           desc:"был ли алкоголь"                              profile:"sveta"`
+	Note         *string `db:"note"          key:"note,заметка,коммент"               kind:"string"   label:"Заметка"            desc:"свободный комментарий к дню"                 profile:"pasha,sveta" rest:"true"`
 }
 
 // Field — описание одного поля записи дня, собранное из тегов структуры.
 type Field struct {
-	Index   int      // индекс поля в структуре Day, для reflect
-	DB      string   // имя колонки в SQLite и ключ в JSON от LLM
-	Kind    Kind     // тип значения
-	Keys    []string // ключи, которые понимает парсер; первый — канонический
-	Label   string   // человекочитаемое имя
-	Unit    string   // единица измерения для вывода, может быть пустой
-	Desc    string   // описание для JSON-схемы LLM
-	Rest    bool     // забирает остаток строки, а не один токен
-	GoField reflect.StructField
+	Index    int      // индекс поля в структуре Day, для reflect
+	DB       string   // имя колонки в SQLite и ключ в JSON от LLM
+	Kind     Kind     // тип значения
+	Keys     []string // ключи, которые понимает парсер; первый — канонический
+	Label    string   // человекочитаемое имя
+	Unit     string   // единица измерения для вывода, может быть пустой
+	Desc     string   // описание для JSON-схемы LLM
+	Profiles []string // профили пользователей, которым поле показывается
+	Rest     bool     // забирает остаток строки, а не один токен
+	GoField  reflect.StructField
 }
 
 var (
@@ -78,15 +74,16 @@ func init() {
 			continue // Date и всё, что не является заполняемым полем
 		}
 		f := Field{
-			Index:   i,
-			DB:      sf.Tag.Get("db"),
-			Kind:    Kind(sf.Tag.Get("kind")),
-			Keys:    strings.Split(key, ","),
-			Label:   sf.Tag.Get("label"),
-			Unit:    sf.Tag.Get("unit"),
-			Desc:    sf.Tag.Get("desc"),
-			Rest:    sf.Tag.Get("rest") == "true",
-			GoField: sf,
+			Index:    i,
+			DB:       sf.Tag.Get("db"),
+			Kind:     Kind(sf.Tag.Get("kind")),
+			Keys:     strings.Split(key, ","),
+			Label:    sf.Tag.Get("label"),
+			Unit:     sf.Tag.Get("unit"),
+			Desc:     sf.Tag.Get("desc"),
+			Profiles: strings.Split(sf.Tag.Get("profile"), ","),
+			Rest:     sf.Tag.Get("rest") == "true",
+			GoField:  sf,
 		}
 		fields = append(fields, f)
 	}
@@ -101,6 +98,30 @@ func init() {
 
 // Fields возвращает поля записи дня в порядке объявления.
 func Fields() []Field { return fields }
+
+// FieldsFor возвращает только поля конкретного пользовательского профиля.
+func FieldsFor(profile string) []Field {
+	var out []Field
+	for _, f := range fields {
+		if f.InProfile(profile) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// InProfile сообщает, должно ли поле быть видно в указанном профиле.
+func (f Field) InProfile(profile string) bool {
+	if profile == "" {
+		return true
+	}
+	for _, p := range f.Profiles {
+		if p == profile {
+			return true
+		}
+	}
+	return false
+}
 
 // FieldByKey ищет поле по любому из его ключей (регистр не важен).
 func FieldByKey(k string) (*Field, bool) {
@@ -153,7 +174,25 @@ func (f *Field) SetAny(d *Day, v any) error {
 			return err
 		}
 		f.set(d, reflect.ValueOf(x))
-	case KindInt, KindScale:
+	case KindInt, KindScale, KindDuration:
+		if f.Kind == KindDuration {
+			if b, ok := v.(bool); ok {
+				if b {
+					return fmt.Errorf("для %s укажи время в минутах", f.Label)
+				}
+				f.set(d, reflect.ValueOf(0))
+				return nil
+			}
+			if s, ok := v.(string); ok {
+				if b, err := ParseBool(s); err == nil {
+					if b {
+						return fmt.Errorf("для %s укажи время в минутах", f.Label)
+					}
+					f.set(d, reflect.ValueOf(0))
+					return nil
+				}
+			}
+		}
 		x, err := toFloat(v)
 		if err != nil {
 			return err
@@ -162,8 +201,8 @@ func (f *Field) SetAny(d *Day, v any) error {
 		if x < 0 {
 			n = int(x - 0.5)
 		}
-		if f.Kind == KindScale && (n < 1 || n > 5) {
-			return fmt.Errorf("ожидалось число от 1 до 5, а не %d", n)
+		if f.Kind == KindScale && (n < 1 || n > 10) {
+			return fmt.Errorf("ожидалось число от 1 до 10, а не %d", n)
 		}
 		f.set(d, reflect.ValueOf(n))
 	case KindBool:
@@ -239,9 +278,14 @@ func Merge(dst, src *Day) {
 
 // SetFields возвращает поля, заполненные в записи.
 func (d *Day) SetFields() []Field {
+	return d.SetFieldsFor("")
+}
+
+// SetFieldsFor возвращает заполненные поля, видимые в профиле.
+func (d *Day) SetFieldsFor(profile string) []Field {
 	var out []Field
 	for i := range fields {
-		if fields[i].IsSet(d) {
+		if fields[i].InProfile(profile) && fields[i].IsSet(d) {
 			out = append(out, fields[i])
 		}
 	}
@@ -251,10 +295,15 @@ func (d *Day) SetFields() []Field {
 // MissingFields возвращает поля, которые ещё не заполнены. Заметка не считается
 // обязательной, поэтому в список не попадает.
 func (d *Day) MissingFields() []Field {
+	return d.MissingFieldsFor("")
+}
+
+// MissingFieldsFor возвращает незаполненные обязательные поля профиля.
+func (d *Day) MissingFieldsFor(profile string) []Field {
 	var out []Field
 	for i := range fields {
 		f := fields[i]
-		if f.DB == "note" || f.IsSet(d) {
+		if f.DB == "note" || !f.InProfile(profile) || f.IsSet(d) {
 			continue
 		}
 		out = append(out, f)
@@ -264,6 +313,25 @@ func (d *Day) MissingFields() []Field {
 
 // Empty сообщает, что в записи нет ни одного заполненного поля.
 func (d *Day) Empty() bool { return len(d.SetFields()) == 0 }
+
+// EmptyFor проверяет, есть ли в записи данные, видимые указанному профилю.
+func (d *Day) EmptyFor(profile string) bool {
+	for _, f := range fields {
+		if f.InProfile(profile) && f.IsSet(d) {
+			return false
+		}
+	}
+	return true
+}
+
+// KeepProfile удаляет поля другого профиля после общего regex/LLM-разбора.
+func (d *Day) KeepProfile(profile string) {
+	for i := range fields {
+		if !fields[i].InProfile(profile) {
+			fields[i].Clear(d)
+		}
+	}
+}
 
 // FormatValue печатает значение поля так, как его увидит человек.
 func (f *Field) FormatValue(d *Day) string {
@@ -276,6 +344,12 @@ func (f *Field) FormatValue(d *Day) string {
 	case *float64:
 		s = strings.TrimSuffix(strings.TrimRight(fmt.Sprintf("%.2f", *x), "0"), ".")
 	case *int:
+		if f.Kind == KindDuration {
+			if *x == 0 {
+				return "нет"
+			}
+			return fmt.Sprintf("да · %d мин", *x)
+		}
 		s = fmt.Sprint(*x)
 	case *bool:
 		if *x {

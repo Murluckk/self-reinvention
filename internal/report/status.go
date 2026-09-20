@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/murluckk/self-reinvention/internal/config"
 	"github.com/murluckk/self-reinvention/internal/model"
 	"github.com/murluckk/self-reinvention/internal/parse"
 )
@@ -15,7 +16,7 @@ func Status(today *model.Day, week *Stats) string {
 	p := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
 
 	p("📅 Сегодня %s (%s)", today.Date, Weekday(today.Date))
-	set := today.SetFields()
+	set := today.SetFieldsFor(week.Profile)
 	if len(set) == 0 {
 		p("Записи ещё нет.")
 	} else {
@@ -23,7 +24,7 @@ func Status(today *model.Day, week *Stats) string {
 			p("  %s: %s", f.Label, f.FormatValue(today))
 		}
 	}
-	if missing := today.MissingFields(); len(missing) > 0 {
+	if missing := today.MissingFieldsFor(week.Profile); len(missing) > 0 {
 		names := make([]string, 0, len(missing))
 		for _, f := range missing {
 			names = append(names, f.Keys[0])
@@ -35,39 +36,47 @@ func Status(today *model.Day, week *Stats) string {
 
 	p("")
 	p("🗓 Неделя %s — %s: %d/%d дней", week.From, week.To, week.FilledDays, week.TotalDays)
-	if week.Sleep.N() > 0 {
-		p("  сон: %.1f ч в среднем", week.Sleep.Avg())
+	if week.Profile == config.ProfileSveta {
+		p("  прогулок: %d, учёба: %d дн., полезное: %d дн.", week.Walks, week.StudyDays, week.UsefulDays)
+		p("  сладкое: %d/%d, алкоголь: %d/%d", week.SweetDays, week.SweetKnown, week.AlcoholDays, week.AlcoholKnown)
+	} else {
+		p("  алгоритмы: %.0f мин, системный дизайн: %.0f мин", week.Algorithms.Sum(), week.SystemDesign.Sum())
 	}
-	p("  тренировок: %d, английский: %.0f мин", week.Workouts, week.English.Sum())
-	if week.Work.N() > 0 {
-		p("  работа: %.1f ч, выходных: %d, смен: %d", week.Work.Sum(), week.DaysOff, week.Shifts)
-	}
-	if week.CleanKnown > 0 {
-		p("  чисто: %d из %d", week.CleanDays, week.CleanKnown)
+	p("  тренировок: %d", week.Workouts)
+	if week.Mood.N() > 0 {
+		p("  состояние: %.1f/10", week.Mood.Avg())
 	}
 
-	p("")
-	p("💰 Капитал")
-	if len(week.CurOrder) == 0 {
-		p("  записей пока нет")
-	}
-	for _, code := range week.CurOrder {
-		c := week.Currencies[code]
-		line := fmt.Sprintf("  %s: %s накоплено", code, parse.FormatAmount(c.Capital))
-		if rate, ok := c.SavingsRate(); ok {
-			line += fmt.Sprintf(" (за неделю отложено %s, норма %.0f%%)", parse.FormatAmount(c.Saved), rate*100)
-		} else if c.Saved > 0 {
-			line += fmt.Sprintf(" (за неделю отложено %s)", parse.FormatAmount(c.Saved))
+	if week.Profile != config.ProfileSveta {
+		p("")
+		p("💰 Капитал")
+		if len(week.CurOrder) == 0 {
+			p("  записей пока нет")
 		}
-		p("%s", line)
+		for _, code := range week.CurOrder {
+			c := week.Currencies[code]
+			line := fmt.Sprintf("  %s: %s накоплено", code, parse.FormatAmount(c.Capital))
+			if rate, ok := c.SavingsRate(); ok {
+				line += fmt.Sprintf(" (за неделю отложено %s, норма %.0f%%)", parse.FormatAmount(c.Saved), rate*100)
+			} else if c.Saved > 0 {
+				line += fmt.Sprintf(" (за неделю отложено %s)", parse.FormatAmount(c.Saved))
+			}
+			p("%s", line)
+		}
 	}
 
 	p("")
 	p("🔥 Стрики")
-	p("  чисто: %d дн.", week.Streaks.Clean)
-	p("  английский: %d дн.", week.Streaks.English)
-	p("  без полного выходного: %d дн.", week.Streaks.NoDayOff)
-	p("  полных выходных за 30 дней: %d", week.Streaks.FullDaysOff30)
+	if week.Profile == config.ProfileSveta {
+		p("  учёба: %d дн.", week.Streaks.Study)
+		p("  прогулки: %d дн.", week.Streaks.Walk)
+		p("  тренировки: %d дн.", week.Streaks.Workout)
+		p("  полезное: %d дн.", week.Streaks.Useful)
+	} else {
+		p("  алгоритмы: %d дн.", week.Streaks.Algorithms)
+		p("  системный дизайн: %d дн.", week.Streaks.SystemDesign)
+		p("  тренировки: %d дн.", week.Streaks.Workout)
+	}
 	p("  записей подряд: %d дн.", week.Streaks.Filled)
 
 	if len(week.Flags) > 0 {

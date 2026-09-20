@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/murluckk/self-reinvention/internal/config"
 	"github.com/murluckk/self-reinvention/internal/model"
 	"github.com/murluckk/self-reinvention/internal/parse"
 	"github.com/murluckk/self-reinvention/internal/report"
@@ -13,7 +14,7 @@ import (
 )
 
 var commandDescriptions = map[string]string{
-	"d":    "запись дня: /d сон 7.5 зал англ 40",
+	"d":    "запись дня: /d подъем 7:30 трен состояние 8",
 	"m":    "деньги: /m -1200 еда",
 	"s":    "статус: сегодня, неделя, стрики",
 	"w":    "выгрузка за n дней в markdown",
@@ -21,13 +22,13 @@ var commandDescriptions = map[string]string{
 	"help": "шпаргалка по синтаксису",
 }
 
-func (b *Bot) handleMessage(ctx context.Context, m *tg.Message) {
+func (b *Bot) handleMessage(ctx context.Context, userID int64, m *tg.Message) {
 	if m.Voice != nil || m.Audio != nil {
 		v := m.Voice
 		if v == nil {
 			v = m.Audio
 		}
-		b.handleVoice(ctx, m, v)
+		b.handleVoice(ctx, userID, m, v)
 		return
 	}
 	text := strings.TrimSpace(m.Text)
@@ -39,23 +40,27 @@ func (b *Bot) handleMessage(ctx context.Context, m *tg.Message) {
 		return
 	}
 	if !strings.HasPrefix(text, "/") {
-		b.handleNote(ctx, m.Chat.ID, text)
+		b.handleNote(ctx, userID, m.Chat.ID, text)
 		return
 	}
 	cmd, args := splitCommand(text)
 	switch cmd {
 	case "start", "help":
-		b.reply(ctx, m.Chat.ID, helpText)
+		b.reply(ctx, m.Chat.ID, helpTextFor(b.profile(userID)))
 	case "d":
-		b.handleDay(ctx, m.Chat.ID, args)
+		b.handleDay(ctx, userID, m.Chat.ID, args)
 	case "m":
-		b.handleMoney(ctx, m.Chat.ID, args)
+		if b.profile(userID) != config.ProfilePasha {
+			b.reply(ctx, m.Chat.ID, "Для твоего профиля деньги сейчас не отслеживаются.")
+			return
+		}
+		b.handleMoney(ctx, userID, m.Chat.ID, args)
 	case "s":
-		b.handleStatus(ctx, m.Chat.ID)
+		b.handleStatus(ctx, userID, m.Chat.ID)
 	case "w":
-		b.handleWeekly(ctx, m.Chat.ID, args)
+		b.handleWeekly(ctx, userID, m.Chat.ID, args)
 	case "undo":
-		b.handleUndo(ctx, m.Chat.ID)
+		b.handleUndo(ctx, userID, m.Chat.ID)
 	default:
 		b.reply(ctx, m.Chat.ID, fmt.Sprintf("Не знаю команду /%s. /help покажет, что я умею.", cmd))
 	}
@@ -75,14 +80,14 @@ func splitCommand(text string) (cmd, args string) {
 	return strings.ToLower(cmd), args
 }
 
-func (b *Bot) handleNote(ctx context.Context, chatID int64, text string) {
+func (b *Bot) handleNote(ctx context.Context, userID, chatID int64, text string) {
 	tag, body := parse.ParseNote(text)
 	if body == "" && tag == "" {
 		b.reply(ctx, chatID, "Пустая заметка.")
 		return
 	}
-	n := &model.Note{TS: b.cfg.Now(), Date: b.cfg.Today(), Tag: tag, Text: body}
-	if err := b.st.AddNote(n); err != nil {
+	n := &model.Note{TS: b.now(userID), Date: b.today(userID), Tag: tag, Text: body}
+	if err := b.st.AddNote(userID, n); err != nil {
 		b.log.Error("сохранение заметки", "err", err)
 		b.reply(ctx, chatID, "Не смог записать заметку: "+err.Error())
 		return
@@ -94,33 +99,33 @@ func (b *Bot) handleNote(ctx context.Context, chatID int64, text string) {
 	b.reply(ctx, chatID, "✍️ записал")
 }
 
-func (b *Bot) handleDay(ctx context.Context, chatID int64, args string) {
-	res := parse.ParseDay(args, b.cfg.Today())
+func (b *Bot) handleDay(ctx context.Context, userID, chatID int64, args string) {
+	res := parse.ParseDayFor(args, b.today(userID), b.profile(userID))
 	if len(res.Errors) > 0 {
 		b.reply(ctx, chatID, "⚠️ "+strings.Join(res.Errors, "\n⚠️ ")+"\n\n/help — шпаргалка")
 	}
 	if res.Day.Empty() {
 		return
 	}
-	if err := b.st.UpsertDay(res.Day); err != nil {
+	if err := b.st.UpsertDay(userID, res.Day); err != nil {
 		b.log.Error("запись дня", "err", err)
 		b.reply(ctx, chatID, "Не смог записать: "+err.Error())
 		return
 	}
-	b.reply(ctx, chatID, b.dayConfirmation(res.Day.Date, res.Day))
+	b.reply(ctx, chatID, b.dayConfirmation(userID, res.Day.Date, res.Day))
 }
 
 // dayConfirmation показывает, что записалось, и что за этот день ещё пусто —
 // чтобы дописать одним сообщением, не заходя в /s.
-func (b *Bot) dayConfirmation(date string, written *model.Day) string {
+func (b *Bot) dayConfirmation(userID int64, date string, written *model.Day) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "✅ %s (%s)\n%s", date, report.Weekday(date), parse.Summary(written))
-	full, err := b.st.GetDay(date)
+	full, err := b.st.GetDay(userID, date)
 	if err != nil {
 		b.log.Error("чтение дня", "err", err)
 		return sb.String()
 	}
-	if missing := full.MissingFields(); len(missing) > 0 {
+	if missing := full.MissingFieldsFor(b.profile(userID)); len(missing) > 0 {
 		names := make([]string, 0, len(missing))
 		for _, f := range missing {
 			names = append(names, f.Keys[0])
@@ -132,21 +137,21 @@ func (b *Bot) dayConfirmation(date string, written *model.Day) string {
 	return sb.String()
 }
 
-func (b *Bot) handleMoney(ctx context.Context, chatID int64, args string) {
-	m, err := parse.ParseMoney(args, b.cfg.Today())
+func (b *Bot) handleMoney(ctx context.Context, userID, chatID int64, args string) {
+	m, err := parse.ParseMoney(args, b.today(userID))
 	if err != nil {
 		b.reply(ctx, chatID, "⚠️ "+err.Error())
 		return
 	}
-	m.TS = b.cfg.Now()
-	if err := b.st.AddMoney(m); err != nil {
+	m.TS = b.now(userID)
+	if err := b.st.AddMoney(userID, m); err != nil {
 		b.log.Error("запись денег", "err", err)
 		b.reply(ctx, chatID, "Не смог записать: "+err.Error())
 		return
 	}
 	text := "💰 " + parse.FormatMoney(m)
 	if m.Kind == model.MoneySaving {
-		if all, err := b.st.MoneyUntil(b.cfg.Today()); err == nil {
+		if all, err := b.st.MoneyUntil(userID, b.today(userID)); err == nil {
 			var capital float64
 			for _, x := range all {
 				if x.Kind == model.MoneySaving && x.Currency == m.Currency {
@@ -159,14 +164,14 @@ func (b *Bot) handleMoney(ctx context.Context, chatID int64, args string) {
 	b.reply(ctx, chatID, text)
 }
 
-func (b *Bot) handleStatus(ctx context.Context, chatID int64) {
-	today := b.cfg.Today()
-	day, err := b.st.GetDay(today)
+func (b *Bot) handleStatus(ctx context.Context, userID, chatID int64) {
+	today := b.today(userID)
+	day, err := b.st.GetDay(userID, today)
 	if err != nil {
 		b.reply(ctx, chatID, "Не смог прочитать запись: "+err.Error())
 		return
 	}
-	st, err := b.stats(report.AddDays(today, -6), today)
+	st, err := b.stats(userID, report.AddDays(today, -6), today)
 	if err != nil {
 		b.reply(ctx, chatID, "Не смог собрать статистику: "+err.Error())
 		return
@@ -174,7 +179,7 @@ func (b *Bot) handleStatus(ctx context.Context, chatID int64) {
 	b.reply(ctx, chatID, report.Status(day, st))
 }
 
-func (b *Bot) handleWeekly(ctx context.Context, chatID int64, args string) {
+func (b *Bot) handleWeekly(ctx context.Context, userID, chatID int64, args string) {
 	n := b.cfg.WeeklyReportN
 	if args != "" {
 		v, err := strconv.Atoi(strings.Fields(args)[0])
@@ -184,17 +189,17 @@ func (b *Bot) handleWeekly(ctx context.Context, chatID int64, args string) {
 		}
 		n = v
 	}
-	if err := b.sendReport(ctx, chatID, n); err != nil {
+	if err := b.sendReport(ctx, userID, chatID, n); err != nil {
 		b.log.Error("выгрузка", "err", err)
 		b.reply(ctx, chatID, "Не смог собрать выгрузку: "+err.Error())
 	}
 }
 
 // sendReport собирает markdown за n дней и отправляет файлом.
-func (b *Bot) sendReport(ctx context.Context, chatID int64, n int) error {
-	to := b.cfg.Today()
+func (b *Bot) sendReport(ctx context.Context, userID, chatID int64, n int) error {
+	to := b.today(userID)
 	from := report.AddDays(to, -(n - 1))
-	st, err := b.stats(from, to)
+	st, err := b.stats(userID, from, to)
 	if err != nil {
 		return err
 	}
@@ -204,8 +209,8 @@ func (b *Bot) sendReport(ctx context.Context, chatID int64, n int) error {
 	return b.tg.SendDocument(ctx, chatID, name, []byte(md), caption)
 }
 
-func (b *Bot) handleUndo(ctx context.Context, chatID int64) {
-	u, err := b.st.LastUndoable()
+func (b *Bot) handleUndo(ctx context.Context, userID, chatID int64) {
+	u, err := b.st.LastUndoable(userID)
 	if err != nil {
 		b.reply(ctx, chatID, "Не смог посмотреть последние записи: "+err.Error())
 		return
@@ -214,7 +219,7 @@ func (b *Bot) handleUndo(ctx context.Context, chatID int64) {
 		b.reply(ctx, chatID, "Отменять нечего: ни заметок, ни денежных записей.")
 		return
 	}
-	if err := b.st.Delete(u.Kind, u.ID); err != nil {
+	if err := b.st.Delete(userID, u.Kind, u.ID); err != nil {
 		b.reply(ctx, chatID, "Не смог удалить: "+err.Error())
 		return
 	}
@@ -226,23 +231,23 @@ func (b *Bot) handleUndo(ctx context.Context, chatID int64) {
 }
 
 // RemindDay — напоминание закрыть день; вызывается планировщиком.
-func (b *Bot) RemindDay(ctx context.Context) error {
-	date := b.cfg.Today()
-	day, err := b.st.GetDay(date)
+func (b *Bot) RemindDay(ctx context.Context, userID int64) error {
+	date := b.today(userID)
+	day, err := b.st.GetDay(userID, date)
 	if err != nil {
 		return err
 	}
-	missing := day.MissingFields()
+	missing := day.MissingFieldsFor(b.profile(userID))
 	if len(missing) == 0 {
-		return b.Notify(ctx, "🌙 День закрыт полностью. Ничего не жду.")
+		return b.Notify(ctx, userID, "🌙 День закрыт полностью. Ничего не жду.")
 	}
 	names := make([]string, 0, len(missing))
 	for _, f := range missing {
 		names = append(names, f.Keys[0])
 	}
-	text := fmt.Sprintf("🌙 Пора закрыть %s (%s).\nНе хватает: %s\n\nОдной строкой: /d %s\nИли просто наговори голосовым.",
+	text := fmt.Sprintf("🌙 Пора внести итоги за %s (%s).\nНе хватает: %s\n\nОдной строкой: /d %s\nИли просто наговори голосовым.",
 		date, report.Weekday(date), strings.Join(names, ", "), exampleFor(missing))
-	return b.Notify(ctx, text)
+	return b.Notify(ctx, userID, text)
 }
 
 // exampleFor строит подсказку из первых незаполненных полей, чтобы не
@@ -259,7 +264,11 @@ func exampleFor(missing []model.Field) string {
 		case model.KindTime:
 			parts = append(parts, f.Keys[0]+" 07:00")
 		case model.KindString:
-			parts = append(parts, f.Keys[0]+" зал")
+			value := "заметка"
+			if f.DB == "useful" {
+				value = "книга или обучающее видео"
+			}
+			parts = append(parts, f.Keys[0]+" "+value)
 		default:
 			parts = append(parts, f.Keys[0]+" …")
 		}
@@ -268,6 +277,6 @@ func exampleFor(missing []model.Field) string {
 }
 
 // SendWeekly отправляет автоматическую недельную выгрузку.
-func (b *Bot) SendWeekly(ctx context.Context) error {
-	return b.sendReport(ctx, b.cfg.OwnerID, b.cfg.WeeklyReportN)
+func (b *Bot) SendWeekly(ctx context.Context, userID int64) error {
+	return b.sendReport(ctx, userID, userID, b.cfg.WeeklyReportN)
 }

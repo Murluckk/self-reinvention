@@ -17,7 +17,7 @@ func ParseFloat(s string) (float64, error) {
 	return f, nil
 }
 
-// ParseInt разбирает целое, терпимо относясь к «40мин» и «2100 ккал».
+// ParseInt разбирает целое, терпимо относясь к единицам измерения.
 func ParseInt(s string) (int, error) {
 	f, err := ParseFloat(strings.TrimSpace(s))
 	if err != nil {

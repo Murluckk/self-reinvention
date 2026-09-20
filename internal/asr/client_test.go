@@ -50,6 +50,52 @@ func TestTranscribeSendsMultipartFile(t *testing.T) {
 	}
 }
 
+func TestOpenAITranscribeSendsOriginalAudioAndContext(t *testing.T) {
+	var gotPath, gotAuth, gotModel, gotLanguage, gotPrompt, gotFilename, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("multipart: %v", err)
+			return
+		}
+		gotModel = r.FormValue("model")
+		gotLanguage = r.FormValue("language")
+		gotPrompt = r.FormValue("prompt")
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			t.Errorf("file: %v", err)
+			return
+		}
+		defer file.Close()
+		body, _ := io.ReadAll(file)
+		gotFilename, gotBody = header.Filename, string(body)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"text":"настроение восемь"}`)
+	}))
+	defer srv.Close()
+
+	client := NewOpenAI(srv.URL, "sk-test", "gpt-transcribe", "дневник и числа")
+	if !client.DirectAudio() {
+		t.Fatal("облачный клиент должен принимать исходное аудио")
+	}
+	text, err := client.Transcribe(context.Background(), []byte("OggS-opus"), "voice.oga")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "настроение восемь" || gotPath != "/audio/transcriptions" {
+		t.Fatalf("text=%q path=%q", text, gotPath)
+	}
+	if gotAuth != "Bearer sk-test" || gotModel != "gpt-transcribe" || gotLanguage != "ru" {
+		t.Fatalf("auth=%q model=%q language=%q", gotAuth, gotModel, gotLanguage)
+	}
+	if gotPrompt != "дневник и числа" || gotFilename != "voice.oga" || gotBody != "OggS-opus" {
+		t.Fatalf("prompt=%q filename=%q body=%q", gotPrompt, gotFilename, gotBody)
+	}
+	if New(srv.URL).DirectAudio() {
+		t.Fatal("локальный ASR ждёт WAV")
+	}
+}
+
 func TestTranscribeErrors(t *testing.T) {
 	cases := []struct {
 		name    string

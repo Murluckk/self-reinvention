@@ -8,168 +8,120 @@ import (
 
 const today = "2026-08-24"
 
-func mustFloat(t *testing.T, p *float64, want float64) {
-	t.Helper()
-	if p == nil {
-		t.Fatalf("поле не заполнено, ожидалось %v", want)
-	}
-	if *p != want {
-		t.Fatalf("получено %v, ожидалось %v", *p, want)
-	}
-}
-
 func mustInt(t *testing.T, p *int, want int) {
 	t.Helper()
-	if p == nil {
-		t.Fatalf("поле не заполнено, ожидалось %v", want)
-	}
-	if *p != want {
-		t.Fatalf("получено %v, ожидалось %v", *p, want)
+	if p == nil || *p != want {
+		t.Fatalf("получено %v, ожидалось %d", p, want)
 	}
 }
 
 func mustStr(t *testing.T, p *string, want string) {
 	t.Helper()
-	if p == nil {
-		t.Fatalf("поле не заполнено, ожидалось %q", want)
-	}
-	if *p != want {
-		t.Fatalf("получено %q, ожидалось %q", *p, want)
+	if p == nil || *p != want {
+		t.Fatalf("получено %v, ожидалось %q", p, want)
 	}
 }
 
 func mustBool(t *testing.T, p *bool, want bool) {
 	t.Helper()
-	if p == nil {
-		t.Fatalf("поле не заполнено, ожидалось %v", want)
-	}
-	if *p != want {
-		t.Fatalf("получено %v, ожидалось %v", *p, want)
+	if p == nil || *p != want {
+		t.Fatalf("получено %v, ожидалось %v", p, want)
 	}
 }
 
-func TestParseDayEqualsSyntax(t *testing.T) {
-	res := ParseDay("сон=7.5 трен=зал англ=40 чисто=да", today)
-	if len(res.Errors) != 0 {
-		t.Fatalf("неожиданные ошибки: %v", res.Errors)
-	}
-	if res.Day.Date != today {
-		t.Fatalf("дата %q, ожидалась %q", res.Day.Date, today)
-	}
-	mustFloat(t, res.Day.Sleep, 7.5)
-	mustStr(t, res.Day.Workout, "зал")
-	mustInt(t, res.Day.English, 40)
-	mustBool(t, res.Day.Clean, true)
-}
-
-func TestParseDaySpaceSyntaxAndUnits(t *testing.T) {
-	res := ParseDay("сон 7,5ч вес 73,4кг англ 40мин ккал 2100", today)
-	if len(res.Errors) != 0 {
-		t.Fatalf("неожиданные ошибки: %v", res.Errors)
-	}
-	mustFloat(t, res.Day.Sleep, 7.5)
-	mustFloat(t, res.Day.Weight, 73.4)
-	mustInt(t, res.Day.English, 40)
-	mustInt(t, res.Day.Kcal, 2100)
-}
-
-func TestParseDayBareBoolFlags(t *testing.T) {
-	res := ParseDay("чисто готовил выходной", today)
-	if len(res.Errors) != 0 {
-		t.Fatalf("неожиданные ошибки: %v", res.Errors)
-	}
-	mustBool(t, res.Day.Clean, true)
-	mustBool(t, res.Day.Cooked, true)
-	mustBool(t, res.Day.DayOff, true)
-}
-
-func TestParseDayBoolForms(t *testing.T) {
-	cases := map[string]bool{
-		"чисто 1": true, "чисто 0": false,
-		"чисто да": true, "чисто нет": false,
-		"чисто +": true, "чисто -": false,
-		"чисто y": true, "чисто n": false,
-		"чисто true": true, "чисто false": false,
-	}
-	for in, want := range cases {
-		res := ParseDay(in, today)
-		if len(res.Errors) != 0 {
-			t.Fatalf("%q: неожиданные ошибки: %v", in, res.Errors)
-		}
-		mustBool(t, res.Day.Clean, want)
-	}
-}
-
-func TestParseDayExplicitDate(t *testing.T) {
-	res := ParseDay("2026-08-20 сон 6", today)
-	if res.Day.Date != "2026-08-20" {
-		t.Fatalf("дата %q, ожидалась 2026-08-20", res.Day.Date)
-	}
-	mustFloat(t, res.Day.Sleep, 6)
-}
-
-func TestParseDayNoteTakesRest(t *testing.T) {
-	res := ParseDay("сон 7 note было тяжело, но норм сон 3", today)
-	if len(res.Errors) != 0 {
-		t.Fatalf("неожиданные ошибки: %v", res.Errors)
-	}
-	mustFloat(t, res.Day.Sleep, 7)
-	mustStr(t, res.Day.Note, "было тяжело, но норм сон 3")
-}
-
-func TestParseDayTimeNormalization(t *testing.T) {
-	res := ParseDay("подъем 7.30 отбой 2315", today)
+func TestParseDayAllFields(t *testing.T) {
+	res := ParseDay("подъем 7.30 отбой 2315 алго 60 системы 45 трен состояние 8", today)
 	if len(res.Errors) != 0 {
 		t.Fatalf("неожиданные ошибки: %v", res.Errors)
 	}
 	mustStr(t, res.Day.Wake, "07:30")
 	mustStr(t, res.Day.Bed, "23:15")
+	mustInt(t, res.Day.Algorithms, 60)
+	mustInt(t, res.Day.SystemDesign, 45)
+	mustBool(t, res.Day.Workout, true)
+	mustInt(t, res.Day.Mood, 8)
 }
 
-func TestParseDayReportsErrors(t *testing.T) {
-	res := ParseDay("сон абв фигня 5 фокус 9", today)
-	if len(res.Errors) != 3 {
-		t.Fatalf("ожидал три претензии, получил %v", res.Errors)
-	}
-	if res.Day.Sleep != nil {
-		t.Fatal("испорченное значение не должно записываться")
-	}
-}
-
-func TestParseDayEmpty(t *testing.T) {
-	res := ParseDay("", today)
-	if len(res.Errors) == 0 {
-		t.Fatal("пустая команда должна давать понятную ошибку")
-	}
-}
-
-func TestParseDayEnglishKeys(t *testing.T) {
-	res := ParseDay("sleep 8 english 30 clean yes weight 72", today)
+func TestParseDayDurationsAcceptNo(t *testing.T) {
+	res := ParseDay("алго нет системы 0 трен нет", today)
 	if len(res.Errors) != 0 {
 		t.Fatalf("неожиданные ошибки: %v", res.Errors)
 	}
-	mustFloat(t, res.Day.Sleep, 8)
-	mustInt(t, res.Day.English, 30)
-	mustBool(t, res.Day.Clean, true)
-	mustFloat(t, res.Day.Weight, 72)
+	mustInt(t, res.Day.Algorithms, 0)
+	mustInt(t, res.Day.SystemDesign, 0)
+	mustBool(t, res.Day.Workout, false)
 }
 
-func TestMergeKeepsExistingValues(t *testing.T) {
-	dst := ParseDay("сон 7 англ 40", today).Day
-	src := ParseDay("англ 60 вес 73", today).Day
-	model.Merge(dst, src)
-	mustFloat(t, dst.Sleep, 7)
-	mustInt(t, dst.English, 60)
-	mustFloat(t, dst.Weight, 73)
-}
-
-func TestScaleValidation(t *testing.T) {
-	res := ParseDay("фокус 5 настроение 0", today)
-	mustInt(t, res.Day.Focus, 5)
-	if res.Day.Mood != nil {
-		t.Fatal("0 вне шкалы 1..5 записываться не должен")
+func TestParseDayBareWorkoutAliases(t *testing.T) {
+	for input, want := range map[string]bool{"зал": true, "бег": true, "отдых": false} {
+		res := ParseDay(input, today)
+		if len(res.Errors) != 0 {
+			t.Fatalf("%q: %v", input, res.Errors)
+		}
+		mustBool(t, res.Day.Workout, want)
 	}
-	if len(res.Errors) != 1 {
-		t.Fatalf("ожидал одну претензию, получил %v", res.Errors)
+}
+
+func TestParseDayDateNoteAndMerge(t *testing.T) {
+	dst := ParseDay("2026-08-20 подъем 7:00 алго 30 note сложный день", today).Day
+	src := ParseDay("алго 60 системы 45", today).Day
+	model.Merge(dst, src)
+	if dst.Date != "2026-08-20" {
+		t.Fatalf("дата: %s", dst.Date)
+	}
+	mustStr(t, dst.Wake, "07:00")
+	mustInt(t, dst.Algorithms, 60)
+	mustInt(t, dst.SystemDesign, 45)
+	mustStr(t, dst.Note, "сложный день")
+}
+
+func TestParseDayScaleValidation(t *testing.T) {
+	res := ParseDay("состояние 11", today)
+	if res.Day.Mood != nil || len(res.Errors) != 1 {
+		t.Fatalf("результат: day=%+v errors=%v", res.Day, res.Errors)
+	}
+}
+
+func TestParseDayRejectsDurationYesWithoutMinutes(t *testing.T) {
+	res := ParseDay("алго да", today)
+	if res.Day.Algorithms != nil || len(res.Errors) != 1 {
+		t.Fatalf("результат: day=%+v errors=%v", res.Day, res.Errors)
+	}
+}
+
+func TestParseDaySvetaProfile(t *testing.T) {
+	res := ParseDayFor(
+		"подъем 8:00 отбой 23:30 трен прогулка учеба состояние 8 сладкое нет алкоголь нет полезное книга по психологии",
+		today, "sveta",
+	)
+	if len(res.Errors) != 0 {
+		t.Fatalf("неожиданные ошибки: %v", res.Errors)
+	}
+	mustStr(t, res.Day.Wake, "08:00")
+	mustBool(t, res.Day.Workout, true)
+	mustBool(t, res.Day.Walk, true)
+	mustBool(t, res.Day.Study, true)
+	mustInt(t, res.Day.Mood, 8)
+	mustBool(t, res.Day.Sweet, false)
+	mustBool(t, res.Day.Alcohol, false)
+	mustStr(t, res.Day.Useful, "книга по психологии")
+}
+
+func TestParseDayProfilesRejectForeignFields(t *testing.T) {
+	if res := ParseDayFor("алго 30", today, "sveta"); len(res.Errors) == 0 || res.Day.Algorithms != nil {
+		t.Fatalf("Свете доступны поля Паши: %+v", res)
+	}
+	if res := ParseDayFor("прогулка", today, "pasha"); len(res.Errors) == 0 || res.Day.Walk != nil {
+		t.Fatalf("Паше доступны поля Светы: %+v", res)
+	}
+}
+
+func TestParseDayUsefulBareAliases(t *testing.T) {
+	for input, want := range map[string]string{"литература": "литература", "ютуб": "обучающее видео"} {
+		res := ParseDayFor(input, today, "sveta")
+		if len(res.Errors) != 0 {
+			t.Fatalf("%q: %v", input, res.Errors)
+		}
+		mustStr(t, res.Day.Useful, want)
 	}
 }

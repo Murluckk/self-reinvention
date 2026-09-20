@@ -16,10 +16,12 @@ import (
 
 // Job — задача по расписанию.
 type Job struct {
-	Name    string        // ключ в таблице jobs
-	At      string        // время срабатывания HH:MM в часовом поясе конфига
-	Weekday *time.Weekday // если задан, срабатывает только в этот день недели
-	Run     func(context.Context) error
+	Name       string         // ключ в таблице jobs
+	At         string         // время срабатывания HH:MM в часовом поясе конфига
+	Location   *time.Location // необязательный часовой пояс конкретного пользователя
+	Weekday    *time.Weekday  // если задан, срабатывает только в этот день недели
+	DayOfMonth int            // если > 0, срабатывает только в это число месяца
+	Run        func(context.Context) error
 }
 
 // Scheduler запускает задачи и помнит, что уже отправлял.
@@ -51,11 +53,25 @@ func (s *Scheduler) Run(ctx context.Context) {
 }
 
 func (s *Scheduler) tick(ctx context.Context) {
-	now := s.cfg.Now()
-	today := now.Format("2006-01-02")
-	nowMin := now.Hour()*60 + now.Minute()
+	s.tickAt(ctx, time.Now())
+}
+
+func (s *Scheduler) tickAt(ctx context.Context, instant time.Time) {
 	for _, j := range s.jobs {
+		location := s.cfg.Location
+		if j.Location != nil {
+			location = j.Location
+		}
+		if location == nil {
+			location = time.UTC
+		}
+		now := instant.In(location)
+		today := now.Format("2006-01-02")
+		nowMin := now.Hour()*60 + now.Minute()
 		if j.Weekday != nil && now.Weekday() != *j.Weekday {
+			continue
+		}
+		if j.DayOfMonth > 0 && now.Day() != j.DayOfMonth {
 			continue
 		}
 		at, err := minutes(j.At)
