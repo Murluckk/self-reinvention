@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/murluckk/self-reinvention/internal/config"
 	"github.com/murluckk/self-reinvention/internal/model"
 	"github.com/murluckk/self-reinvention/internal/parse"
 	"github.com/murluckk/self-reinvention/internal/report"
@@ -13,7 +14,7 @@ import (
 )
 
 var commandDescriptions = map[string]string{
-	"d":    "запись дня: /d сон 7.5 зал англ 40",
+	"d":    "запись дня: /d подъем 7:30 трен состояние 8",
 	"m":    "деньги: /m -1200 еда",
 	"s":    "статус: сегодня, неделя, стрики",
 	"w":    "выгрузка за n дней в markdown",
@@ -45,10 +46,14 @@ func (b *Bot) handleMessage(ctx context.Context, userID int64, m *tg.Message) {
 	cmd, args := splitCommand(text)
 	switch cmd {
 	case "start", "help":
-		b.reply(ctx, m.Chat.ID, helpText)
+		b.reply(ctx, m.Chat.ID, helpTextFor(b.profile(userID)))
 	case "d":
 		b.handleDay(ctx, userID, m.Chat.ID, args)
 	case "m":
+		if b.profile(userID) != config.ProfilePasha {
+			b.reply(ctx, m.Chat.ID, "Для твоего профиля деньги сейчас не отслеживаются.")
+			return
+		}
 		b.handleMoney(ctx, userID, m.Chat.ID, args)
 	case "s":
 		b.handleStatus(ctx, userID, m.Chat.ID)
@@ -95,7 +100,7 @@ func (b *Bot) handleNote(ctx context.Context, userID, chatID int64, text string)
 }
 
 func (b *Bot) handleDay(ctx context.Context, userID, chatID int64, args string) {
-	res := parse.ParseDay(args, b.cfg.Today())
+	res := parse.ParseDayFor(args, b.cfg.Today(), b.profile(userID))
 	if len(res.Errors) > 0 {
 		b.reply(ctx, chatID, "⚠️ "+strings.Join(res.Errors, "\n⚠️ ")+"\n\n/help — шпаргалка")
 	}
@@ -120,7 +125,7 @@ func (b *Bot) dayConfirmation(userID int64, date string, written *model.Day) str
 		b.log.Error("чтение дня", "err", err)
 		return sb.String()
 	}
-	if missing := full.MissingFields(); len(missing) > 0 {
+	if missing := full.MissingFieldsFor(b.profile(userID)); len(missing) > 0 {
 		names := make([]string, 0, len(missing))
 		for _, f := range missing {
 			names = append(names, f.Keys[0])
@@ -232,7 +237,7 @@ func (b *Bot) RemindDay(ctx context.Context, userID int64) error {
 	if err != nil {
 		return err
 	}
-	missing := day.MissingFields()
+	missing := day.MissingFieldsFor(b.profile(userID))
 	if len(missing) == 0 {
 		return b.Notify(ctx, userID, "🌙 День закрыт полностью. Ничего не жду.")
 	}

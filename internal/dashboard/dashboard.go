@@ -239,6 +239,11 @@ type expenseEntry struct {
 }
 
 func (d *Dashboard) page(userID int64, period int, selectedDate string) (*pageData, error) {
+	user, _ := d.cfg.User(userID)
+	profile := user.Profile
+	if profile == "" {
+		profile = config.ProfilePasha
+	}
 	to := d.cfg.Today()
 	from := report.AddDays(to, -(period - 1))
 	days, err := d.st.Days(userID, from, to)
@@ -261,7 +266,7 @@ func (d *Dashboard) page(userID int64, period int, selectedDate string) (*pageDa
 		From: from, To: to,
 		Days: days, DaysAll: daysAll,
 		Money: money, MoneyAll: moneyAll,
-		Today: to, Cfg: d.cfg,
+		Today: to, Cfg: d.cfg, Profile: profile,
 	})
 
 	p := &pageData{
@@ -276,35 +281,53 @@ func (d *Dashboard) page(userID int64, period int, selectedDate string) (*pageDa
 		TotalDays:  stats.TotalDays,
 		Flags:      stats.Flags,
 	}
-	if user, ok := d.cfg.User(userID); ok {
-		p.Name = user.Name
-	}
-	p.Cards = []card{
-		{"Последний подъём", seriesLastTime(stats.Wake), seriesHint(stats.Wake, "отмечено")},
-		{"Последнее засыпание", seriesLastTime(stats.Bed), seriesHint(stats.Bed, "отмечено")},
-		{"Алгоритмы", fmt.Sprintf("%.0f мин", stats.Algorithms.Sum()), fmt.Sprintf("%d дней", stats.AlgorithmDays)},
-		{"Системный дизайн", fmt.Sprintf("%.0f мин", stats.SystemDesign.Sum()), fmt.Sprintf("%d дней", stats.SystemDesignDays)},
-	}
+	p.Name = user.Name
 	p.States = []stateCard{
 		{"Эмоциональное состояние", scaleValue(stats.Mood), "mood"},
 	}
 	p.Chart = makeChart(days)
-	expenses := expenseTotals(money)
-	p.Days = makeDays(days, expenses, period, 31)
-	p.Expense = makeExpenseDetail(selectedDate, from, to, money)
-	p.Streaks = []streak{
-		{"Алгоритмы", fmt.Sprintf("%d дн.", stats.Streaks.Algorithms)},
-		{"Системный дизайн", fmt.Sprintf("%d дн.", stats.Streaks.SystemDesign)},
-		{"Тренировки", fmt.Sprintf("%d дн.", stats.Streaks.Workout)},
-		{"Записи", fmt.Sprintf("%d дн.", stats.Streaks.Filled)},
+	expenses := map[string]float64{}
+	if profile == config.ProfileSveta {
+		p.Cards = []card{
+			{"Последний подъём", seriesLastTime(stats.Wake), seriesHint(stats.Wake, "отмечено")},
+			{"Последнее засыпание", seriesLastTime(stats.Bed), seriesHint(stats.Bed, "отмечено")},
+			{"Тренировки", strconv.Itoa(stats.Workouts), "за период"},
+			{"Прогулки", strconv.Itoa(stats.Walks), "за период"},
+			{"Учёба", strconv.Itoa(stats.StudyDays), "дней"},
+			{"Полезные занятия", strconv.Itoa(stats.UsefulDays), "дней"},
+		}
+		p.Streaks = []streak{
+			{"Учёба", fmt.Sprintf("%d дн.", stats.Streaks.Study)},
+			{"Прогулки", fmt.Sprintf("%d дн.", stats.Streaks.Walk)},
+			{"Тренировки", fmt.Sprintf("%d дн.", stats.Streaks.Workout)},
+			{"Полезное", fmt.Sprintf("%d дн.", stats.Streaks.Useful)},
+		}
+	} else {
+		p.Cards = []card{
+			{"Последний подъём", seriesLastTime(stats.Wake), seriesHint(stats.Wake, "отмечено")},
+			{"Последнее засыпание", seriesLastTime(stats.Bed), seriesHint(stats.Bed, "отмечено")},
+			{"Алгоритмы", fmt.Sprintf("%.0f мин", stats.Algorithms.Sum()), fmt.Sprintf("%d дней", stats.AlgorithmDays)},
+			{"Системный дизайн", fmt.Sprintf("%.0f мин", stats.SystemDesign.Sum()), fmt.Sprintf("%d дней", stats.SystemDesignDays)},
+		}
+		p.Streaks = []streak{
+			{"Алгоритмы", fmt.Sprintf("%d дн.", stats.Streaks.Algorithms)},
+			{"Системный дизайн", fmt.Sprintf("%d дн.", stats.Streaks.SystemDesign)},
+			{"Тренировки", fmt.Sprintf("%d дн.", stats.Streaks.Workout)},
+			{"Записи", fmt.Sprintf("%d дн.", stats.Streaks.Filled)},
+		}
+		expenses = expenseTotals(money)
+		p.Expense = makeExpenseDetail(selectedDate, from, to, money)
 	}
-	for _, code := range stats.CurOrder {
-		c := stats.Currencies[code]
-		p.Money = append(p.Money, moneyView{
-			Code: code, Income: parse.FormatAmount(c.Income),
-			Expense: parse.FormatAmount(c.Expense), Saved: parse.FormatAmount(c.Saved),
-			Capital: parse.FormatAmount(c.Capital),
-		})
+	p.Days = makeDays(days, expenses, profile, period, 31)
+	if profile == config.ProfilePasha {
+		for _, code := range stats.CurOrder {
+			c := stats.Currencies[code]
+			p.Money = append(p.Money, moneyView{
+				Code: code, Income: parse.FormatAmount(c.Income),
+				Expense: parse.FormatAmount(c.Expense), Saved: parse.FormatAmount(c.Saved),
+				Capital: parse.FormatAmount(c.Capital),
+			})
+		}
 	}
 	return p, nil
 }
@@ -372,7 +395,7 @@ func makeChart(days []*model.Day) chart {
 	return out
 }
 
-func makeDays(days []*model.Day, expenses map[string]float64, period, limit int) []dayView {
+func makeDays(days []*model.Day, expenses map[string]float64, profile string, period, limit int) []dayView {
 	merged := append([]*model.Day(nil), days...)
 	known := make(map[string]bool, len(days))
 	for _, d := range days {
@@ -391,7 +414,7 @@ func makeDays(days []*model.Day, expenses map[string]float64, period, limit int)
 	out := make([]dayView, 0, len(merged)-start)
 	for i := len(merged) - 1; i >= start; i-- {
 		d := merged[i]
-		if d.Empty() {
+		if d.EmptyFor(profile) {
 			continue
 		}
 		v := dayView{Date: shortDate(d.Date), Weekday: report.Weekday(d.Date)}
@@ -400,25 +423,44 @@ func makeDays(days []*model.Day, expenses map[string]float64, period, limit int)
 				v.Metrics = append(v.Metrics, metric{Label: label, Value: value, Class: class, Href: href})
 			}
 		}
+		addBool := func(label string, value *bool, positiveGood bool) {
+			if value == nil {
+				return
+			}
+			text, class := "нет", ""
+			if *value {
+				text = "да"
+			}
+			if *value == positiveGood {
+				class = "good"
+			} else {
+				class = "bad"
+			}
+			add(label, text, class, "")
+		}
 		if d.Wake != nil {
 			add("Подъём", *d.Wake, "", "")
 		}
 		if d.Bed != nil {
 			add("Заснул", *d.Bed, "", "")
 		}
-		if d.Algorithms != nil {
-			add("Алгоритмы", durationValue(*d.Algorithms), "", "")
-		}
-		if d.SystemDesign != nil {
-			add("Системный дизайн", durationValue(*d.SystemDesign), "", "")
-		}
-		if d.Workout != nil {
-			value, class := "нет", "bad"
-			if *d.Workout {
-				value, class = "да", "good"
+		if profile == config.ProfileSveta {
+			addBool("Прогулка", d.Walk, true)
+			addBool("Учёба", d.Study, true)
+			if d.Useful != nil {
+				add("Полезное занятие", *d.Useful, "good", "")
 			}
-			add("Тренировка", value, class, "")
+			addBool("Сладкое", d.Sweet, false)
+			addBool("Алкоголь", d.Alcohol, false)
+		} else {
+			if d.Algorithms != nil {
+				add("Алгоритмы", durationValue(*d.Algorithms), "", "")
+			}
+			if d.SystemDesign != nil {
+				add("Системный дизайн", durationValue(*d.SystemDesign), "", "")
+			}
 		}
+		addBool("Тренировка", d.Workout, true)
 		if d.Mood != nil {
 			add("Состояние", fmt.Sprintf("%d/10", *d.Mood), "mood", "")
 		}

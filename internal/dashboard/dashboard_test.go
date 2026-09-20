@@ -25,8 +25,8 @@ func TestDashboardRequiresPasswordAndRendersData(t *testing.T) {
 	cfg := &config.Config{
 		Location: time.UTC,
 		Users: []config.User{
-			{TelegramID: 1001, Name: "Паша", DashboardUser: "owner", DashboardPassword: "secret"},
-			{TelegramID: 1002, Name: "Света", DashboardUser: "friend", DashboardPassword: "other-secret"},
+			{TelegramID: 1001, Name: "Паша", Profile: config.ProfilePasha, DashboardUser: "owner", DashboardPassword: "secret"},
+			{TelegramID: 1002, Name: "Света", Profile: config.ProfileSveta, DashboardUser: "friend", DashboardPassword: "other-secret"},
 		},
 		MaxWakeSpreadH: 1.5, MinSavingsRate: .55,
 	}
@@ -44,8 +44,12 @@ func TestDashboardRequiresPasswordAndRendersData(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	otherWake := "09:00"
-	if err := st.UpsertDay(1002, &model.Day{Date: cfg.Today(), Wake: &otherWake}); err != nil {
+	otherWake, useful := "09:00", "книга по психологии"
+	walk, study, sweet, alcohol := true, true, false, false
+	if err := st.UpsertDay(1002, &model.Day{
+		Date: cfg.Today(), Wake: &otherWake, Walk: &walk, Study: &study,
+		Useful: &useful, Sweet: &sweet, Alcohol: &alcohol,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	dash := New(cfg, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -84,8 +88,14 @@ func TestDashboardRequiresPasswordAndRendersData(t *testing.T) {
 	res = httptest.NewRecorder()
 	dash.Handler().ServeHTTP(res, req)
 	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "Света") ||
-		!strings.Contains(res.Body.String(), "09:00") {
+		!strings.Contains(res.Body.String(), "09:00") ||
+		!strings.Contains(res.Body.String(), "Прогулки") ||
+		!strings.Contains(res.Body.String(), "книга по психологии") {
 		t.Fatalf("дашборд второго пользователя: %d %s", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "Алгоритмы") || strings.Contains(res.Body.String(), "Системный дизайн") ||
+		strings.Contains(res.Body.String(), "Деньги") {
+		t.Fatal("в профиль Светы попали поля или финансы Паши")
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/?days=7&date="+cfg.Today(), nil)

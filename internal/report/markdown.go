@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/murluckk/self-reinvention/internal/config"
 	"github.com/murluckk/self-reinvention/internal/model"
 	"github.com/murluckk/self-reinvention/internal/parse"
 )
@@ -39,9 +40,16 @@ func Markdown(s *Stats) string {
 	p("- всего: **%d**", s.Workouts)
 	p("")
 
-	p("## Развитие")
-	p("- алгоритмы: **%.0f мин**, %s", s.Algorithms.Sum(), days(s.AlgorithmDays))
-	p("- системный дизайн: **%.0f мин**, %s", s.SystemDesign.Sum(), days(s.SystemDesignDays))
+	if s.Profile == config.ProfileSveta {
+		p("## Активность и развитие")
+		p("- прогулки: **%d**", s.Walks)
+		p("- учёба: **%s**", days(s.StudyDays))
+		p("- полезные занятия: **%s**", days(s.UsefulDays))
+	} else {
+		p("## Развитие")
+		p("- алгоритмы: **%.0f мин**, %s", s.Algorithms.Sum(), days(s.AlgorithmDays))
+		p("- системный дизайн: **%.0f мин**, %s", s.SystemDesign.Sum(), days(s.SystemDesignDays))
+	}
 	p("")
 
 	p("## Состояние")
@@ -54,29 +62,43 @@ func Markdown(s *Stats) string {
 	}
 	p("")
 
-	p("## Деньги")
-	if len(s.CurOrder) == 0 {
-		p("- за период записей нет")
-	}
-	for _, code := range s.CurOrder {
-		c := s.Currencies[code]
-		p("### %s", code)
-		if c.Income > 0 || c.Expense > 0 {
-			p("- доход: **%s**", parse.FormatAmount(c.Income))
-			p("- расход: **%s**", parse.FormatAmount(c.Expense))
+	if s.Profile == config.ProfileSveta {
+		p("## Питание")
+		p("- сладкое: **%d из %d** отмеченных дней", s.SweetDays, s.SweetKnown)
+		p("- алкоголь: **%d из %d** отмеченных дней", s.AlcoholDays, s.AlcoholKnown)
+		p("")
+	} else {
+		p("## Деньги")
+		if len(s.CurOrder) == 0 {
+			p("- за период записей нет")
 		}
-		p("- отложено: **%s**", parse.FormatAmount(c.Saved))
-		if rate, ok := c.SavingsRate(); ok {
-			p("- норма сбережений: **%.0f%%**", rate*100)
+		for _, code := range s.CurOrder {
+			c := s.Currencies[code]
+			p("### %s", code)
+			if c.Income > 0 || c.Expense > 0 {
+				p("- доход: **%s**", parse.FormatAmount(c.Income))
+				p("- расход: **%s**", parse.FormatAmount(c.Expense))
+			}
+			p("- отложено: **%s**", parse.FormatAmount(c.Saved))
+			if rate, ok := c.SavingsRate(); ok {
+				p("- норма сбережений: **%.0f%%**", rate*100)
+			}
+			p("- накоплено всего: **%s**", parse.FormatAmount(c.Capital))
 		}
-		p("- накоплено всего: **%s**", parse.FormatAmount(c.Capital))
+		p("")
 	}
-	p("")
 
 	p("## Стрики")
-	p("- алгоритмы подряд: **%d**", s.Streaks.Algorithms)
-	p("- системный дизайн подряд: **%d**", s.Streaks.SystemDesign)
-	p("- тренировки подряд: **%d**", s.Streaks.Workout)
+	if s.Profile == config.ProfileSveta {
+		p("- учёба подряд: **%d**", s.Streaks.Study)
+		p("- прогулки подряд: **%d**", s.Streaks.Walk)
+		p("- тренировки подряд: **%d**", s.Streaks.Workout)
+		p("- полезные занятия подряд: **%d**", s.Streaks.Useful)
+	} else {
+		p("- алгоритмы подряд: **%d**", s.Streaks.Algorithms)
+		p("- системный дизайн подряд: **%d**", s.Streaks.SystemDesign)
+		p("- тренировки подряд: **%d**", s.Streaks.Workout)
+	}
 	p("- заполненных записей подряд: **%d**", s.Streaks.Filled)
 	p("")
 
@@ -91,7 +113,7 @@ func Markdown(s *Stats) string {
 
 	p("## По дням")
 	p("")
-	b.WriteString(dayTable(s.Days))
+	b.WriteString(dayTable(s.Days, s.Profile))
 	p("")
 
 	p("## Заметки")
@@ -118,8 +140,11 @@ func Markdown(s *Stats) string {
 
 // dayTable рисует таблицу по дням: она нужна, чтобы на разборе можно было
 // глазами найти конкретный день, а не только средние.
-func dayTable(days []*model.Day) string {
+func dayTable(days []*model.Day, profile string) string {
 	cols := []string{"wake", "bed", "algorithms", "system_design", "workout", "mood"}
+	if profile == config.ProfileSveta {
+		cols = []string{"wake", "bed", "workout", "walk", "study", "useful", "mood", "sweet", "alcohol"}
+	}
 	var fs []model.Field
 	head := []string{"дата", "дн"}
 	for _, c := range cols {
@@ -132,7 +157,7 @@ func dayTable(days []*model.Day) string {
 	b.WriteString("| " + strings.Join(head, " | ") + " |\n")
 	b.WriteString("|" + strings.Repeat("---|", len(head)) + "\n")
 	for _, d := range days {
-		if d.Empty() {
+		if d.EmptyFor(profile) {
 			continue
 		}
 		row := []string{d.Date, Weekday(d.Date)}

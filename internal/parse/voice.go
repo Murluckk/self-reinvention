@@ -83,6 +83,23 @@ var boolRules = []struct {
 	{col: "workout",
 		neg: rx(`не\s+трен`, `без\s+трен`, `трен\w*\s+нет`, `пропустил\s+трен`),
 		pos: rx(bs+`зал[аеуы]?`+be, `качалк`, bs+`бег`, `пробежк`, `турник`, `воркаут`, `трениров`)},
+	{col: "walk",
+		neg: rx(`не\s+гулял`, `без\s+прогул`, `прогулк[аи]\s+не\s+был`),
+		pos: rx(`гулял[аи]?`, `прогулк`)},
+	{col: "study",
+		neg: rx(`не\s+учил`, `учеб[ыа]\s+не\s+был`, `не\s+занимал[а-я]*\s+учеб`),
+		pos: rx(`учил[ась]+`, `занимал[а-я]*\s+учеб`, `была\s+учеб`)},
+	{col: "sweet",
+		neg: rx(`без\s+сладк`, `сладк[а-я]*\s+не\s+ел`),
+		pos: rx(`сладк`, `десерт`, `конфет`)},
+	{col: "alcohol",
+		neg: rx(`без\s+алкогол`, `не\s+пил[аи]?\s+(?:алкогол|вино|пиво)`),
+		pos: rx(`алкогол`, bs+`вин[оа]`+be, bs+`пив[оа]`+be, `коктейл`)},
+}
+
+var textRules = []rule{
+	{col: "useful", val: "литература", res: rx(`литератур`, `читал[аи]?\s+(?:книг|стать)`)},
+	{col: "useful", val: "обучающее видео", res: rx(`обучающ[а-я]*\s+видео`, `ютуб[а-я]*\s+обуч`)},
 }
 
 var moneyRules = []struct {
@@ -140,6 +157,15 @@ func ParseVoiceRegex(text, date string) *Voice {
 		}
 		if matchAny(n, r.pos) {
 			_ = f.SetAny(v.Day, true)
+		}
+	}
+	for _, r := range textRules {
+		f, ok := model.FieldByColumn(r.col)
+		if !ok || f.IsSet(v.Day) {
+			continue
+		}
+		if matchAny(n, r.res) {
+			_ = f.SetAny(v.Day, r.val)
 		}
 	}
 	for _, r := range moneyRules {

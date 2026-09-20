@@ -55,6 +55,11 @@ type DayCommand struct {
 // `ключ значение` равнозначны, булев ключ можно писать голым флагом (`чисто`),
 // а числа принимаются с запятой и с единицами измерения (`вес 73,4кг`).
 func ParseDay(args, today string) DayCommand {
+	return ParseDayFor(args, today, "")
+}
+
+// ParseDayFor разбирает только поля, доступные пользовательскому профилю.
+func ParseDayFor(args, today, profile string) DayCommand {
 	res := DayCommand{Day: &model.Day{Date: today}}
 	toks := tokenize(args)
 	i := 0
@@ -74,11 +79,14 @@ func ParseDay(args, today string) DayCommand {
 			key, val, hasVal = t.text[:idx], t.text[idx+1:], true
 		}
 		f, ok := model.FieldByKey(key)
+		if ok && !f.InProfile(profile) {
+			ok = false
+		}
 		if !ok {
 			// Голые значения-сокращения: «зал» вместо «трен=зал». Ради скорости
 			// ввода — то, что пишется чаще всего, должно писаться короче всего.
 			if bv, isBare := bareValues[strings.ToLower(key)]; isBare && !hasVal {
-				if bf, found := model.FieldByColumn(bv.col); found {
+				if bf, found := model.FieldByColumn(bv.col); found && bf.InProfile(profile) {
 					if err := bf.SetAny(res.Day, bv.val); err != nil {
 						res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", key, err))
 					}
@@ -144,14 +152,17 @@ func ParseDay(args, today string) DayCommand {
 
 // bareValues — сокращения, которые можно писать без ключа.
 var bareValues = map[string]struct{ col, val string }{
-	"зал":      {"workout", "да"},
-	"качалка":  {"workout", "да"},
-	"бег":      {"workout", "да"},
-	"пробежка": {"workout", "да"},
-	"улица":    {"workout", "да"},
-	"турник":   {"workout", "да"},
-	"безтрена": {"workout", "нет"},
-	"отдых":    {"workout", "нет"},
+	"зал":        {"workout", "да"},
+	"качалка":    {"workout", "да"},
+	"бег":        {"workout", "да"},
+	"пробежка":   {"workout", "да"},
+	"улица":      {"workout", "да"},
+	"турник":     {"workout", "да"},
+	"безтрена":   {"workout", "нет"},
+	"отдых":      {"workout", "нет"},
+	"литература": {"useful", "литература"},
+	"ютуб":       {"useful", "обучающее видео"},
+	"обучалка":   {"useful", "обучающее видео"},
 }
 
 var unitSuffix = regexp.MustCompile(`^([0-9]+(?:[.,][0-9]+)?)\s*[^\s0-9.,:]*$`)

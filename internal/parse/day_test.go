@@ -88,3 +88,40 @@ func TestParseDayRejectsDurationYesWithoutMinutes(t *testing.T) {
 		t.Fatalf("результат: day=%+v errors=%v", res.Day, res.Errors)
 	}
 }
+
+func TestParseDaySvetaProfile(t *testing.T) {
+	res := ParseDayFor(
+		"подъем 8:00 отбой 23:30 трен прогулка учеба состояние 8 сладкое нет алкоголь нет полезное книга по психологии",
+		today, "sveta",
+	)
+	if len(res.Errors) != 0 {
+		t.Fatalf("неожиданные ошибки: %v", res.Errors)
+	}
+	mustStr(t, res.Day.Wake, "08:00")
+	mustBool(t, res.Day.Workout, true)
+	mustBool(t, res.Day.Walk, true)
+	mustBool(t, res.Day.Study, true)
+	mustInt(t, res.Day.Mood, 8)
+	mustBool(t, res.Day.Sweet, false)
+	mustBool(t, res.Day.Alcohol, false)
+	mustStr(t, res.Day.Useful, "книга по психологии")
+}
+
+func TestParseDayProfilesRejectForeignFields(t *testing.T) {
+	if res := ParseDayFor("алго 30", today, "sveta"); len(res.Errors) == 0 || res.Day.Algorithms != nil {
+		t.Fatalf("Свете доступны поля Паши: %+v", res)
+	}
+	if res := ParseDayFor("прогулка", today, "pasha"); len(res.Errors) == 0 || res.Day.Walk != nil {
+		t.Fatalf("Паше доступны поля Светы: %+v", res)
+	}
+}
+
+func TestParseDayUsefulBareAliases(t *testing.T) {
+	for input, want := range map[string]string{"литература": "литература", "ютуб": "обучающее видео"} {
+		res := ParseDayFor(input, today, "sveta")
+		if len(res.Errors) != 0 {
+			t.Fatalf("%q: %v", input, res.Errors)
+		}
+		mustStr(t, res.Day.Useful, want)
+	}
+}

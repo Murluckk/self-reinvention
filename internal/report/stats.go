@@ -3,6 +3,7 @@ package report
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/murluckk/self-reinvention/internal/config"
 	"github.com/murluckk/self-reinvention/internal/model"
@@ -123,6 +124,7 @@ func (c *CurrencyStats) SavingsRate() (float64, bool) {
 // Stats — всё, что бот знает о периоде.
 type Stats struct {
 	From, To   string
+	Profile    string
 	TotalDays  int
 	FilledDays int
 
@@ -135,6 +137,13 @@ type Stats struct {
 	Workouts         int
 	AlgorithmDays    int
 	SystemDesignDays int
+	Walks            int
+	StudyDays        int
+	UsefulDays       int
+	SweetDays        int
+	SweetKnown       int
+	AlcoholDays      int
+	AlcoholKnown     int
 
 	Currencies map[string]*CurrencyStats
 	CurOrder   []string
@@ -155,19 +164,23 @@ type Input struct {
 	Notes    []*model.Note  // заметки за период
 	Today    string         // точка отсчёта стриков
 	Cfg      *config.Config // пороги для флагов
+	Profile  string
 }
 
 // Build считает агрегаты по периоду.
 func Build(in Input) *Stats {
+	if in.Profile == "" {
+		in.Profile = config.ProfilePasha
+	}
 	s := &Stats{
-		From: in.From, To: in.To,
+		From: in.From, To: in.To, Profile: in.Profile,
 		TotalDays:  DaysBetween(in.From, in.To),
 		Currencies: map[string]*CurrencyStats{},
 		Days:       in.Days,
 		Notes:      in.Notes,
 	}
 	for _, d := range in.Days {
-		if d.Empty() {
+		if d.EmptyFor(in.Profile) {
 			continue
 		}
 		s.FilledDays++
@@ -199,8 +212,29 @@ func Build(in Input) *Stats {
 		if d.Workout != nil && *d.Workout {
 			s.Workouts++
 		}
+		if d.Walk != nil && *d.Walk {
+			s.Walks++
+		}
+		if d.Study != nil && *d.Study {
+			s.StudyDays++
+		}
+		if d.Useful != nil && strings.TrimSpace(*d.Useful) != "" {
+			s.UsefulDays++
+		}
+		if d.Sweet != nil {
+			s.SweetKnown++
+			if *d.Sweet {
+				s.SweetDays++
+			}
+		}
+		if d.Alcohol != nil {
+			s.AlcoholKnown++
+			if *d.Alcohol {
+				s.AlcoholDays++
+			}
+		}
 	}
-	s.Streaks = ComputeStreaks(in.DaysAll, in.Today)
+	s.Streaks = ComputeStreaksFor(in.DaysAll, in.Today, in.Profile)
 
 	for _, m := range in.Money {
 		c := s.cur(m.Currency)
@@ -269,8 +303,10 @@ func flags(s *Stats, cfg *config.Config) []string {
 	if s.Wake.N() > 1 && s.Wake.Spread() > cfg.MaxWakeSpreadH {
 		out = append(out, fmt.Sprintf("разброс подъёма %.1f ч при пороге %.1f", s.Wake.Spread(), cfg.MaxWakeSpreadH))
 	}
-	if rate, ok := s.Main().SavingsRate(); ok && rate < cfg.MinSavingsRate {
-		out = append(out, fmt.Sprintf("норма сбережений %.0f%% при норме ≥%.0f%%", rate*100, cfg.MinSavingsRate*100))
+	if s.Profile != config.ProfileSveta {
+		if rate, ok := s.Main().SavingsRate(); ok && rate < cfg.MinSavingsRate {
+			out = append(out, fmt.Sprintf("норма сбережений %.0f%% при норме ≥%.0f%%", rate*100, cfg.MinSavingsRate*100))
+		}
 	}
 	return out
 }

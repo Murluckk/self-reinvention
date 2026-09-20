@@ -35,3 +35,17 @@ func TestVoiceRegexUnknownPhraseFallsThrough(t *testing.T) {
 		t.Fatalf("не должен был ничего распознать, получил %+v", v.Day)
 	}
 }
+
+func TestVoiceRegexSvetaFields(t *testing.T) {
+	v := ParseVoiceRegex(
+		"Гуляла, занималась учебой, тренировка была, читала книгу, сладкое не ела, без алкоголя, состояние 9",
+		today,
+	)
+	mustBool(t, v.Day.Walk, true)
+	mustBool(t, v.Day.Study, true)
+	mustBool(t, v.Day.Workout, true)
+	mustStr(t, v.Day.Useful, "литература")
+	mustBool(t, v.Day.Sweet, false)
+	mustBool(t, v.Day.Alcohol, false)
+	mustInt(t, v.Day.Mood, 9)
+}

@@ -1,12 +1,19 @@
 package report
 
-import "github.com/murluckk/self-reinvention/internal/model"
+import (
+	"strings"
+
+	"github.com/murluckk/self-reinvention/internal/model"
+)
 
 // Streaks — счётчики, которые показывает /s.
 type Streaks struct {
 	Algorithms   int // дней подряд с алгоритмами
 	SystemDesign int // дней подряд с системным дизайном
 	Workout      int // дней подряд с тренировкой
+	Walk         int // дней подряд с прогулкой
+	Study        int // дней подряд с учёбой
+	Useful       int // дней подряд с полезным занятием
 	Filled       int // дней подряд с заполненной записью
 }
 
@@ -53,10 +60,15 @@ func streak(idx map[string]*model.Day, today, first string, unknownContinues boo
 // ComputeStreaks считает стрики по всем известным дням. days должны быть
 // отсортированы по дате; today задаёт точку отсчёта.
 func ComputeStreaks(days []*model.Day, today string) Streaks {
+	return ComputeStreaksFor(days, today, "pasha")
+}
+
+// ComputeStreaksFor считает только серии, относящиеся к профилю пользователя.
+func ComputeStreaksFor(days []*model.Day, today, profile string) Streaks {
 	idx := make(map[string]*model.Day, len(days))
 	first := ""
 	for _, d := range days {
-		if d.Empty() {
+		if d.EmptyFor(profile) {
 			continue
 		}
 		idx[d.Date] = d
@@ -92,8 +104,31 @@ func ComputeStreaks(days []*model.Day, today string) Streaks {
 		}
 		return triNo
 	})
+	boolStreak := func(value func(*model.Day) *bool) int {
+		return streak(idx, today, first, false, func(d *model.Day) tri {
+			v := value(d)
+			if v == nil {
+				return triUnknown
+			}
+			if *v {
+				return triYes
+			}
+			return triNo
+		})
+	}
+	s.Walk = boolStreak(func(d *model.Day) *bool { return d.Walk })
+	s.Study = boolStreak(func(d *model.Day) *bool { return d.Study })
+	s.Useful = streak(idx, today, first, false, func(d *model.Day) tri {
+		if d.Useful == nil {
+			return triUnknown
+		}
+		if strings.TrimSpace(*d.Useful) != "" {
+			return triYes
+		}
+		return triNo
+	})
 	s.Filled = streak(idx, today, first, false, func(d *model.Day) tri {
-		if d.Empty() {
+		if d.EmptyFor(profile) {
 			return triNo
 		}
 		return triYes

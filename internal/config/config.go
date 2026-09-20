@@ -14,9 +14,15 @@ import (
 type User struct {
 	TelegramID        int64
 	Name              string
+	Profile           string
 	DashboardUser     string
 	DashboardPassword string
 }
+
+const (
+	ProfilePasha = "pasha"
+	ProfileSveta = "sveta"
+)
 
 // Config — всё, что боту нужно знать о внешнем мире, плюс пороги для флагов
 // недельного отчёта.
@@ -71,7 +77,8 @@ func Load() (*Config, error) {
 		TranscribePrompt: env("TRANSCRIBE_PROMPT",
 			"Русский личный дневник. Точно записывай числа и время цифрами. "+
 				"Термины: подъём, отбой, алгоритмы, системный дизайн, тренировка, "+
-				"эмоциональное состояние, траты, аванс, зарплата, накопления."),
+				"прогулка, учёба, литература, обучающее видео, полезное занятие, "+
+				"сладкое, алкоголь, эмоциональное состояние, траты, аванс, зарплата, накопления."),
 		BackupDir:      env("BACKUP_DIR", "./data/backups"),
 		DailyBackup:    env("DAILY_BACKUP", "04:00"),
 		MaxWakeSpreadH: envFloat("MAX_WAKE_SPREAD_H", 1.5),
@@ -96,7 +103,7 @@ func Load() (*Config, error) {
 	}
 	c.OwnerID = id
 	c.Users, err = parseUsers(os.Getenv("TRACKER_USERS"), User{
-		TelegramID: id, Name: c.DashboardUser,
+		TelegramID: id, Name: c.DashboardUser, Profile: ProfilePasha,
 		DashboardUser: c.DashboardUser, DashboardPassword: c.DashboardPassword,
 	})
 	if err != nil {
@@ -160,30 +167,48 @@ func (c *Config) User(id int64) (User, bool) {
 	return User{}, false
 }
 
-// parseUsers понимает TRACKER_USERS=id:имя:login:password,... Старый формат
-// id:login:password тоже принимается.
+// parseUsers понимает TRACKER_USERS=id:имя:профиль:login:password,... Старые
+// форматы без профиля и имени тоже принимаются.
 // Если переменная не задана, сохраняется обратная совместимость с OWNER_ID.
 func parseUsers(raw string, fallback User) ([]User, error) {
 	if strings.TrimSpace(raw) == "" {
+		if fallback.Profile == "" {
+			fallback.Profile = ProfilePasha
+		}
 		return []User{fallback}, nil
 	}
 	var out []User
 	seenIDs := map[int64]bool{}
 	seenLogins := map[string]bool{}
 	for _, item := range strings.Split(raw, ",") {
-		parts := strings.SplitN(strings.TrimSpace(item), ":", 4)
-		if len(parts) != 3 && len(parts) != 4 {
-			return nil, fmt.Errorf("TRACKER_USERS: ожидалось id:имя:login:password, получено %q", item)
+		parts := strings.SplitN(strings.TrimSpace(item), ":", 5)
+		if len(parts) < 3 || len(parts) > 5 {
+			return nil, fmt.Errorf("TRACKER_USERS: ожидалось id:имя:профиль:login:password, получено %q", item)
 		}
 		id, err := strconv.ParseInt(parts[0], 10, 64)
 		if err != nil || id <= 0 {
 			return nil, fmt.Errorf("TRACKER_USERS: плохой telegram id %q", parts[0])
 		}
-		name, login, password := parts[1], parts[1], parts[2]
-		if len(parts) == 4 {
+		name, profile, login, password := parts[1], "", parts[1], parts[2]
+		switch len(parts) {
+		case 4:
 			name, login, password = parts[1], parts[2], parts[3]
+		case 5:
+			name, profile, login, password = parts[1], parts[2], parts[3], parts[4]
 		}
 		name, login = strings.TrimSpace(name), strings.TrimSpace(login)
+		profile = strings.ToLower(strings.TrimSpace(profile))
+		if profile == "" {
+			switch strings.ToLower(name) {
+			case "света", "sveta":
+				profile = ProfileSveta
+			default:
+				profile = ProfilePasha
+			}
+		}
+		if profile != ProfilePasha && profile != ProfileSveta {
+			return nil, fmt.Errorf("TRACKER_USERS: неизвестный профиль %q для %d", profile, id)
+		}
 		if name == "" || login == "" || password == "" {
 			return nil, fmt.Errorf("TRACKER_USERS: пустое имя, логин или пароль для %d", id)
 		}
@@ -192,7 +217,7 @@ func parseUsers(raw string, fallback User) ([]User, error) {
 		}
 		seenIDs[id], seenLogins[login] = true, true
 		out = append(out, User{
-			TelegramID: id, Name: name,
+			TelegramID: id, Name: name, Profile: profile,
 			DashboardUser: login, DashboardPassword: password,
 		})
 	}

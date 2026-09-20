@@ -90,3 +90,36 @@ func TestStatusContainsCapitalAndLearning(t *testing.T) {
 		}
 	}
 }
+
+func TestSvetaProfileReport(t *testing.T) {
+	days := []*model.Day{
+		{Date: "2026-08-22", Wake: sp("08:00"), Workout: bp(true), Walk: bp(true), Study: bp(true), Useful: sp("литература"), Mood: ip(8), Sweet: bp(false), Alcohol: bp(false)},
+		{Date: "2026-08-23", Wake: sp("08:30"), Workout: bp(false), Walk: bp(true), Study: bp(true), Useful: sp("обучающее видео"), Mood: ip(7), Sweet: bp(true), Alcohol: bp(false)},
+		{Date: "2026-08-24", Wake: sp("08:15"), Workout: bp(true), Walk: bp(true), Study: bp(false), Useful: sp("книга"), Mood: ip(9), Sweet: bp(false), Alcohol: bp(true)},
+	}
+	st := Build(Input{
+		From: "2026-08-22", To: "2026-08-24", Today: "2026-08-24",
+		Days: days, DaysAll: days, Profile: config.ProfileSveta,
+		Cfg: &config.Config{MaxWakeSpreadH: 1.5, MinSavingsRate: .55},
+	})
+	if st.FilledDays != 3 || st.Walks != 3 || st.StudyDays != 2 || st.UsefulDays != 3 ||
+		st.SweetDays != 1 || st.SweetKnown != 3 || st.AlcoholDays != 1 || st.AlcoholKnown != 3 {
+		t.Fatalf("статистика Светы: %+v", st)
+	}
+	if st.Streaks.Walk != 3 || st.Streaks.Study != 0 || st.Streaks.Useful != 3 {
+		t.Fatalf("стрики Светы: %+v", st.Streaks)
+	}
+	md := Markdown(st)
+	for _, want := range []string{"## Активность и развитие", "прогулки", "учёба", "## Питание", "сладкое", "алкоголь", "Полезное занятие"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("нет %q:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, "## Деньги") || strings.Contains(md, "алгоритмы") {
+		t.Fatalf("в отчёт Светы попал профиль Паши:\n%s", md)
+	}
+	status := Status(days[len(days)-1], st)
+	if strings.Contains(status, "Капитал") || !strings.Contains(status, "прогулок") {
+		t.Fatalf("неверный статус Светы:\n%s", status)
+	}
+}

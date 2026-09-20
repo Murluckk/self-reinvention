@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/murluckk/self-reinvention/internal/config"
 	"github.com/murluckk/self-reinvention/internal/model"
 	"github.com/murluckk/self-reinvention/internal/parse"
 	"github.com/murluckk/self-reinvention/internal/report"
@@ -107,6 +108,12 @@ func (b *Bot) handleVoice(ctx context.Context, userID int64, m *tg.Message, v *t
 			res = llmRes
 		}
 	}
+	profile := b.profile(userID)
+	res.Day.KeepProfile(profile)
+	if profile == config.ProfileSveta {
+		res.Money = nil
+	}
+	res.Recogn = res.Count()
 	if res.Count() == 0 && strings.TrimSpace(res.Note) == "" {
 		res.Note = text
 	}
