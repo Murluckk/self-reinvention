@@ -61,7 +61,7 @@ func sqlType(k model.Kind) string {
 	switch k {
 	case model.KindFloat:
 		return "REAL"
-	case model.KindInt, model.KindScale, model.KindBool:
+	case model.KindInt, model.KindScale, model.KindDuration, model.KindBool:
 		return "INTEGER"
 	default:
 		return "TEXT"
@@ -115,6 +115,9 @@ func (s *Store) migrate(legacyOwnerID int64) error {
 	if err := s.migrateUsers(legacyOwnerID); err != nil {
 		return err
 	}
+	if err := s.resetDaySchema(); err != nil {
+		return err
+	}
 	for _, q := range []string{
 		`CREATE INDEX IF NOT EXISTS notes_user_date ON notes(user_id, date)`,
 		`CREATE INDEX IF NOT EXISTS money_user_date ON money(user_id, date)`,
@@ -123,7 +126,53 @@ func (s *Store) migrate(legacyOwnerID int64) error {
 			return fmt.Errorf("индекс пользователя: %w", err)
 		}
 	}
-	return s.migrateRatingsToTen()
+	return nil
+}
+
+// resetDaySchema один раз начинает упрощённый дневник с чистого листа. Формат
+// поля workout изменился со строки на bool, а пользователь явно отказался от
+// старых дневных данных, поэтому переносить несовместимые значения не нужно.
+func (s *Store) resetDaySchema() error {
+	const name = "simplified_day_v3"
+	var applied int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE name=?", name).Scan(&applied); err != nil {
+		return err
+	}
+	if applied > 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	defs := make([]string, 0, len(model.Fields()))
+	for _, f := range model.Fields() {
+		defs = append(defs, f.DB+" "+sqlType(f.Kind))
+	}
+	create := `CREATE TABLE days_v3 (
+		user_id INTEGER NOT NULL, date TEXT NOT NULL, updated_at TEXT`
+	if len(defs) > 0 {
+		create += ", " + strings.Join(defs, ", ")
+	}
+	create += `, PRIMARY KEY (user_id, date))`
+	if _, err := tx.Exec(create); err != nil {
+		return fmt.Errorf("новая схема дневника: %w", err)
+	}
+	if _, err := tx.Exec(`DROP TABLE days`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`ALTER TABLE days_v3 RENAME TO days`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO schema_migrations (name, applied_at) VALUES (?,?)",
+		name, time.Now().UTC().Format(time.RFC3339),
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // migrateUsers переводит старую базу с PRIMARY KEY(date) на независимые
@@ -313,7 +362,7 @@ func scanDay(rows *sql.Rows, fs []model.Field) (*model.Day, error) {
 		case model.KindFloat:
 			h := &sql.NullFloat64{}
 			holders[i], dest = h, append(dest, h)
-		case model.KindInt, model.KindScale, model.KindBool:
+		case model.KindInt, model.KindScale, model.KindDuration, model.KindBool:
 			h := &sql.NullInt64{}
 			holders[i], dest = h, append(dest, h)
 		default:

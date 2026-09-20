@@ -87,6 +87,18 @@ func TestWeekdayFilter(t *testing.T) {
 	}
 }
 
+func TestDayOfMonthFilter(t *testing.T) {
+	cfg, st := setup(t)
+	runs := 0
+	wrong := time.Now().UTC().Day()%28 + 1
+	s := New(cfg, st, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Job{Name: "monthly", At: "00:00", DayOfMonth: wrong, Run: func(context.Context) error { runs++; return nil }})
+	s.tick(context.Background())
+	if runs != 0 {
+		t.Fatal("задача сработала не в своё число месяца")
+	}
+}
+
 func TestMinutes(t *testing.T) {
 	if v, err := minutes("23:00"); err != nil || v != 1380 {
 		t.Fatalf("%d %v", v, err)

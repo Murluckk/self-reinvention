@@ -14,7 +14,7 @@ func jsonType(k model.Kind) string {
 	switch k {
 	case model.KindFloat:
 		return "number"
-	case model.KindInt, model.KindScale:
+	case model.KindInt, model.KindScale, model.KindDuration:
 		return "integer"
 	case model.KindBool:
 		return "boolean"
@@ -64,10 +64,9 @@ func SystemPrompt() string {
 - Поля, которых нет во фразе, НЕ включай в вывод вообще. Не подставляй нули, пустые строки и null.
 - Числа возвращай числами, а не строками. Слова-числительные переводи в цифры ("семь с половиной" -> 7.5).
 - Время суток — строка "HH:MM" в 24-часовом формате.
-- workout: одно из "зал", "бег", "улица", "нет".
-- clean=true, если день без алкоголя и без порно; при упоминании срыва — false.
-- day_off=true только если человек весь день не работал.
-- shift=true, если работал в выходной за деньги.
-- Отрицания учитывай: "не готовил" -> cooked=false, "без тренировки" -> workout="нет".
+- algorithms и system_design: длительность занятия в минутах; если явно не занимался — 0.
+- workout=true, если была любая тренировка; если явно не было — false.
+- mood: эмоциональное состояние от 1 до 10.
+- Отрицания учитывай: "не занимался алгоритмами" -> algorithms=0, "без тренировки" -> workout=false.
 - Если во фразе есть кусок, не относящийся ни к одному полю, положи его в note.`
 }

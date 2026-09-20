@@ -2,7 +2,6 @@ package report
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/murluckk/self-reinvention/internal/model"
@@ -21,15 +20,7 @@ func Markdown(s *Stats) string {
 	p("Заполнено дней: **%d из %d**", s.FilledDays, s.TotalDays)
 	p("")
 
-	p("## Сон")
-	if s.Sleep.N() > 0 {
-		mn, mnd := s.Sleep.Min()
-		mx, mxd := s.Sleep.Max()
-		p("- среднее: **%.1f ч** (за %s)", s.Sleep.Avg(), days(s.Sleep.N()))
-		p("- минимум: %.1f ч (%s), максимум: %.1f ч (%s)", mn, mnd, mx, mxd)
-	} else {
-		p("- нет данных")
-	}
+	p("## Режим")
 	if s.Wake.N() > 0 {
 		mn, _ := s.Wake.Min()
 		mx, _ := s.Wake.Max()
@@ -37,76 +28,31 @@ func Markdown(s *Stats) string {
 	} else {
 		p("- подъём: нет данных")
 	}
+	if s.Bed.N() > 0 {
+		mn, _ := s.Bed.Min()
+		mx, _ := s.Bed.Max()
+		p("- засыпание: с %s до %s, разброс **%.1f ч**", hhmm(mn), hhmm(mx), s.Bed.Spread())
+	} else {
+		p("- засыпание: нет данных")
+	}
 	p("")
 
 	p("## Тренировки")
 	p("- всего: **%d**", s.Workouts)
-	if len(s.WorkoutTypes) > 0 {
-		types := make([]string, 0, len(s.WorkoutTypes))
-		for k := range s.WorkoutTypes {
-			types = append(types, k)
-		}
-		sort.Strings(types)
-		for _, t := range types {
-			p("- %s: %d", t, s.WorkoutTypes[t])
-		}
-	}
 	p("")
 
-	p("## Английский")
-	p("- сумма: **%.0f мин**", s.English.Sum())
-	p("- дней с занятием: %d из %d", s.EnglishDays, s.TotalDays)
-	p("- пропусков (включая незаполненные дни): **%d**", s.EnglishSkips)
-	p("")
-
-	p("## Вес")
-	if s.Weight.N() > 0 {
-		first := s.Weight.Values[0]
-		last := s.Weight.Values[s.Weight.N()-1]
-		p("- %.1f → %.1f кг, дельта **%+.1f кг** (%s)", first, last, s.Weight.Delta(), measures(s.Weight.N()))
-	} else {
-		p("- нет данных")
-	}
-	p("")
-
-	p("## Работа")
-	p("- часов всего: **%.1f**", s.Work.Sum())
-	p("- оплачиваемых смен в выходные: %d", s.Shifts)
-	p("- полных выходных: **%d**", s.DaysOff)
-	p("- максимальная серия дней без выходного: **%d**", s.MaxNoDayOff)
-	p("")
-
-	p("## Чистые дни")
-	p("- чисто: **%d из %d** отмеченных дней", s.CleanDays, s.CleanKnown)
-	if len(s.CleanFails) > 0 {
-		p("- срывы: %s", strings.Join(s.CleanFails, ", "))
-	} else {
-		p("- срывов не отмечено")
-	}
-	p("")
-
-	p("## Телеграм вне окон")
-	if s.Telegram.N() > 0 {
-		p("- сумма: **%.0f**, среднее за день: %.1f (за %s)", s.Telegram.Sum(), s.Telegram.Avg(), days(s.Telegram.N()))
-	} else {
-		p("- нет данных")
-	}
+	p("## Развитие")
+	p("- алгоритмы: **%.0f мин**, %s", s.Algorithms.Sum(), days(s.AlgorithmDays))
+	p("- системный дизайн: **%.0f мин**, %s", s.SystemDesign.Sum(), days(s.SystemDesignDays))
 	p("")
 
 	p("## Состояние")
-	for _, x := range []struct {
-		name string
-		s    *Series
-	}{{"фокус", &s.Focus}, {"настроение", &s.Mood}, {"энергия", &s.Energy}} {
-		if x.s.N() == 0 {
-			p("- %s: нет данных", x.name)
-			continue
-		}
-		if x.s.N() < 4 {
-			p("- %s: среднее **%.1f/10** (за %s, для динамики мало данных)", x.name, x.s.Avg(), days(x.s.N()))
-			continue
-		}
-		p("- %s: среднее **%.1f/10**, динамика %+.1f", x.name, x.s.Avg(), x.s.HalfDelta())
+	if s.Mood.N() == 0 {
+		p("- нет данных")
+	} else if s.Mood.N() < 4 {
+		p("- среднее **%.1f/10** (за %s)", s.Mood.Avg(), days(s.Mood.N()))
+	} else {
+		p("- среднее **%.1f/10**, динамика %+.1f", s.Mood.Avg(), s.Mood.HalfDelta())
 	}
 	p("")
 
@@ -130,10 +76,9 @@ func Markdown(s *Stats) string {
 	p("")
 
 	p("## Стрики")
-	p("- чисто подряд: **%d**", s.Streaks.Clean)
-	p("- английский подряд: **%d**", s.Streaks.English)
-	p("- без полного выходного подряд: **%d**", s.Streaks.NoDayOff)
-	p("- полных выходных за 30 дней: **%d**", s.Streaks.FullDaysOff30)
+	p("- алгоритмы подряд: **%d**", s.Streaks.Algorithms)
+	p("- системный дизайн подряд: **%d**", s.Streaks.SystemDesign)
+	p("- тренировки подряд: **%d**", s.Streaks.Workout)
 	p("- заполненных записей подряд: **%d**", s.Streaks.Filled)
 	p("")
 
@@ -176,7 +121,7 @@ func Markdown(s *Stats) string {
 // dayTable рисует таблицу по дням: она нужна, чтобы на разборе можно было
 // глазами найти конкретный день, а не только средние.
 func dayTable(days []*model.Day) string {
-	cols := []string{"sleep", "wake", "workout", "english", "work", "day_off", "clean", "telegram", "focus", "mood", "energy"}
+	cols := []string{"wake", "bed", "algorithms", "system_design", "workout", "mood"}
 	var fs []model.Field
 	head := []string{"дата", "дн"}
 	for _, c := range cols {

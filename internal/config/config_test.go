@@ -4,13 +4,14 @@ import "testing"
 
 func TestParseUsers(t *testing.T) {
 	users, err := parseUsers(
-		"949465743:owner:pass-one,908821693:friend:pass-two",
+		"949465743:Паша:owner:pass-one,908821693:Света:friend:pass-two",
 		User{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(users) != 2 || users[0].TelegramID != 949465743 ||
+		users[0].Name != "Паша" || users[1].Name != "Света" ||
 		users[1].DashboardUser != "friend" || users[1].DashboardPassword != "pass-two" {
 		t.Fatalf("users: %+v", users)
 	}

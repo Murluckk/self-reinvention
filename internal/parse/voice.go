@@ -49,43 +49,22 @@ func rx(pats ...string) []*regexp.Regexp {
 
 // Числовые правила: в первой группе шаблона должно оказаться значение.
 var numRules = []rule{
-	{col: "sleep", res: rx(
-		`(?:спал|поспал|проспал)\D{0,12}?(\d{1,2}(?:[.,]\d+)?)`,
-		`сон\D{0,6}?(\d{1,2}(?:[.,]\d+)?)`,
-		`(\d{1,2}(?:[.,]\d+)?)\s*час\w*\s+сна`,
-	)},
 	{col: "wake", res: rx(
 		`(?:подъем|встал|проснулся|проснул)\D{0,6}?(\d{1,2}(?:[:.]\d{2})?)`,
 	)},
 	{col: "bed", res: rx(
 		`(?:отбой|лег|уснул|уснула|заснул)\D{0,6}?(\d{1,2}(?:[:.]\d{2})?)`,
 	)},
-	{col: "weight", res: rx(
-		`вес\D{0,6}?(\d{2,3}(?:[.,]\d+)?)`,
+	{col: "algorithms", res: rx(
+		`(?:алго|алгоритм)\D{0,12}?(\d{1,3})\s*мин`,
+		`(\d{1,3})\s*минут\w*\D{0,8}?(?:алго|алгоритм)`,
 	)},
-	{col: "english", res: rx(
-		`(?:англ|инглиш|english)\D{0,12}?(\d{1,3})`,
-		`(\d{1,3})\s*минут\w*\s+англ`,
+	{col: "system_design", res: rx(
+		`(?:системн[а-яё]*\s+дизайн|системдизайн|системы)\D{0,12}?(\d{1,3})\s*мин`,
+		`(\d{1,3})\s*минут[а-яё]*\D{0,8}?(?:системн[а-яё]*\s+дизайн|системы)`,
 	)},
-	{col: "work", res: rx(
-		`(?:работал|отработал|работы|работа)\D{0,10}?(\d{1,2}(?:[.,]\d+)?)\s*час`,
-		`(\d{1,2}(?:[.,]\d+)?)\s*час\w*\s+работ`,
-	)},
-	{col: "focus", res: rx(`фокус\D{0,8}?(10|[1-9])(?:\D|$)`)},
 	{col: "mood", res: rx(`настроени\D{0,8}?(10|[1-9])(?:\D|$)`)},
-	{col: "energy", res: rx(`энерги\D{0,8}?(10|[1-9])(?:\D|$)`)},
-	{col: "telegram", res: rx(
-		`(?:телеграм|тг)\D{0,12}?(\d{1,3})\s*раз`,
-		`(\d{1,3})\s*раз\w*\D{0,12}?(?:телеграм|тг)`,
-	)},
-}
-
-// Строковые правила: срабатывание шаблона означает конкретное значение.
-var strRules = []rule{
-	{col: "workout", val: "нет", res: rx(`не\s+трен`, `без\s+трен`, `трен\w*\s+нет`, `пропустил\s+трен`)},
-	{col: "workout", val: "зал", res: rx(bs+`зал[аеуы]?`+be, `качалк`)},
-	{col: "workout", val: "бег", res: rx(bs+`бег`, `пробежк`)},
-	{col: "workout", val: "улица", res: rx(`турник`, `воркаут`, `улич\w*\s+трен`, `трен\w*\s+на\s+улиц`)},
+	{col: "mood", res: rx(`состояни\D{0,8}?(10|[1-9])(?:\D|$)`)},
 }
 
 // Булевы правила. neg — шаблоны, означающие «нет»; они проверяются первыми,
@@ -95,18 +74,15 @@ var boolRules = []struct {
 	pos []*regexp.Regexp
 	neg []*regexp.Regexp
 }{
-	{col: "cooked",
-		neg: rx(`не\s+готов`, `без\s+готовк`),
-		pos: rx(`готовил`, `готовк`)},
-	{col: "day_off",
-		neg: rx(`не\s+выходн`, `без\s+выходн`),
-		pos: rx(bs+`выходн`, `не\s+работал`, `полный\s+отдых`)},
-	{col: "shift",
-		neg: rx(`без\s+смен`, `не\s+было\s+смен`),
-		pos: rx(bs+`смен[ауы]`+be, `подработ`)},
-	{col: "clean",
-		neg: rx(`не\s+чист`, `сорвал`, bs+`выпил`, bs+`пил`+be, `алкогол`, `порн`),
-		pos: rx(bs+`чист`, bs+`трезв`)},
+	{col: "algorithms",
+		neg: rx(`(?:алго|алгоритм)[а-яё]*\s+(?:не|нет)`, `не\s+занимал[а-яё]*\s+(?:алго|алгоритм)`),
+		pos: nil},
+	{col: "system_design",
+		neg: rx(`(?:систем[а-яё]*\s+дизайн|системы)\s+(?:не|нет)`, `не\s+занимал[а-яё]*\s+систем`),
+		pos: nil},
+	{col: "workout",
+		neg: rx(`не\s+трен`, `без\s+трен`, `трен\w*\s+нет`, `пропустил\s+трен`),
+		pos: rx(bs+`зал[аеуы]?`+be, `качалк`, bs+`бег`, `пробежк`, `турник`, `воркаут`, `трениров`)},
 }
 
 var moneyRules = []struct {
@@ -153,18 +129,6 @@ func ParseVoiceRegex(text, date string) *Voice {
 			}
 		}
 	}
-	for _, r := range strRules {
-		f, ok := model.FieldByColumn(r.col)
-		if !ok || f.IsSet(v.Day) {
-			continue
-		}
-		for _, re := range r.res {
-			if re.MatchString(n) {
-				_ = f.SetAny(v.Day, r.val)
-				break
-			}
-		}
-	}
 	for _, r := range boolRules {
 		f, ok := model.FieldByColumn(r.col)
 		if !ok {
@@ -176,14 +140,6 @@ func ParseVoiceRegex(text, date string) *Voice {
 		}
 		if matchAny(n, r.pos) {
 			_ = f.SetAny(v.Day, true)
-		}
-	}
-	// «выходной» и «работал 8 часов» одновременно — противоречие; доверяем часам.
-	if w, ok := model.FieldByColumn("work"); ok && w.IsSet(v.Day) {
-		if hours, _ := w.Get(v.Day).(*float64); hours != nil && *hours > 0 {
-			if off, ok := model.FieldByColumn("day_off"); ok {
-				_ = off.SetAny(v.Day, false)
-			}
 		}
 	}
 	for _, r := range moneyRules {

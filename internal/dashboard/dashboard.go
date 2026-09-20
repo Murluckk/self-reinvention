@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"html/template"
 	"log/slog"
+	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -116,7 +118,7 @@ func (d *Dashboard) index(w http.ResponseWriter, r *http.Request) {
 	}
 	period := periodFrom(r)
 	userID, _ := r.Context().Value(userIDKey{}).(int64)
-	page, err := d.page(userID, period)
+	page, err := d.page(userID, period, r.URL.Query().Get("date"))
 	if err != nil {
 		d.log.Error("сборка дашборда", "err", err)
 		http.Error(w, "Не смог собрать данные", http.StatusInternalServerError)
@@ -139,6 +141,7 @@ func periodFrom(r *http.Request) int {
 }
 
 type pageData struct {
+	Name       string
 	Period     int
 	From       string
 	To         string
@@ -148,6 +151,7 @@ type pageData struct {
 	Chart      chart
 	Days       []dayView
 	Money      []moneyView
+	Expense    *expenseDetail
 	Streaks    []streak
 	Flags      []string
 	FilledDays int
@@ -200,6 +204,7 @@ type metric struct {
 	Label string
 	Value string
 	Class string
+	Href  string
 }
 
 type moneyView struct {
@@ -215,7 +220,25 @@ type streak struct {
 	Value string
 }
 
-func (d *Dashboard) page(userID int64, period int) (*pageData, error) {
+type expenseDetail struct {
+	Date       string
+	Total      string
+	Categories []expenseCategory
+	Entries    []expenseEntry
+}
+
+type expenseCategory struct {
+	Name   string
+	Amount string
+}
+
+type expenseEntry struct {
+	Category string
+	Comment  string
+	Amount   string
+}
+
+func (d *Dashboard) page(userID int64, period int, selectedDate string) (*pageData, error) {
 	to := d.cfg.Today()
 	from := report.AddDays(to, -(period - 1))
 	days, err := d.st.Days(userID, from, to)
@@ -253,24 +276,27 @@ func (d *Dashboard) page(userID int64, period int) (*pageData, error) {
 		TotalDays:  stats.TotalDays,
 		Flags:      stats.Flags,
 	}
+	if user, ok := d.cfg.User(userID); ok {
+		p.Name = user.Name
+	}
 	p.Cards = []card{
-		{"Сон", seriesValue(stats.Sleep, " ч"), seriesHint(stats.Sleep, "в среднем")},
-		{"Тренировки", strconv.Itoa(stats.Workouts), "за период"},
-		{"Английский", fmt.Sprintf("%.0f мин", stats.English.Sum()), fmt.Sprintf("%d дней", stats.EnglishDays)},
-		{"Работа", fmt.Sprintf("%.1f ч", stats.Work.Sum()), fmt.Sprintf("%d выходных", stats.DaysOff)},
+		{"Последний подъём", seriesLastTime(stats.Wake), seriesHint(stats.Wake, "отмечено")},
+		{"Последнее засыпание", seriesLastTime(stats.Bed), seriesHint(stats.Bed, "отмечено")},
+		{"Алгоритмы", fmt.Sprintf("%.0f мин", stats.Algorithms.Sum()), fmt.Sprintf("%d дней", stats.AlgorithmDays)},
+		{"Системный дизайн", fmt.Sprintf("%.0f мин", stats.SystemDesign.Sum()), fmt.Sprintf("%d дней", stats.SystemDesignDays)},
 	}
 	p.States = []stateCard{
-		{"Фокус", scaleValue(stats.Focus), "focus"},
-		{"Настроение", scaleValue(stats.Mood), "mood"},
-		{"Энергия", scaleValue(stats.Energy), "energy"},
+		{"Эмоциональное состояние", scaleValue(stats.Mood), "mood"},
 	}
 	p.Chart = makeChart(days)
-	p.Days = makeDays(days, 31)
+	expenses := expenseTotals(money)
+	p.Days = makeDays(days, expenses, period, 31)
+	p.Expense = makeExpenseDetail(selectedDate, from, to, money)
 	p.Streaks = []streak{
-		{"Чисто", fmt.Sprintf("%d дн.", stats.Streaks.Clean)},
-		{"Английский", fmt.Sprintf("%d дн.", stats.Streaks.English)},
+		{"Алгоритмы", fmt.Sprintf("%d дн.", stats.Streaks.Algorithms)},
+		{"Системный дизайн", fmt.Sprintf("%d дн.", stats.Streaks.SystemDesign)},
+		{"Тренировки", fmt.Sprintf("%d дн.", stats.Streaks.Workout)},
 		{"Записи", fmt.Sprintf("%d дн.", stats.Streaks.Filled)},
-		{"Без выходного", fmt.Sprintf("%d дн.", stats.Streaks.NoDayOff)},
 	}
 	for _, code := range stats.CurOrder {
 		c := stats.Currencies[code]
@@ -283,11 +309,17 @@ func (d *Dashboard) page(userID int64, period int) (*pageData, error) {
 	return p, nil
 }
 
-func seriesValue(s report.Series, suffix string) string {
+func seriesLastTime(s report.Series) string {
 	if s.N() == 0 {
 		return "—"
 	}
-	return fmt.Sprintf("%.1f%s", s.Avg(), suffix)
+	hours := s.Values[s.N()-1]
+	h := int(hours)
+	m := int(math.Round((hours - float64(h)) * 60))
+	if m == 60 {
+		h, m = h+1, 0
+	}
+	return fmt.Sprintf("%02d:%02d", h, m)
 }
 
 func seriesHint(s report.Series, label string) string {
@@ -310,9 +342,7 @@ func makeChart(days []*model.Day) chart {
 		value       func(*model.Day) *int
 	}
 	sources := []source{
-		{"Фокус", "focus", func(d *model.Day) *int { return d.Focus }},
-		{"Настроение", "mood", func(d *model.Day) *int { return d.Mood }},
-		{"Энергия", "energy", func(d *model.Day) *int { return d.Energy }},
+		{"Состояние", "mood", func(d *model.Day) *int { return d.Mood }},
 	}
 	out := chart{}
 	for _, src := range sources {
@@ -342,57 +372,118 @@ func makeChart(days []*model.Day) chart {
 	return out
 }
 
-func makeDays(days []*model.Day, limit int) []dayView {
-	start := 0
-	if len(days) > limit {
-		start = len(days) - limit
+func makeDays(days []*model.Day, expenses map[string]float64, period, limit int) []dayView {
+	merged := append([]*model.Day(nil), days...)
+	known := make(map[string]bool, len(days))
+	for _, d := range days {
+		known[d.Date] = true
 	}
-	out := make([]dayView, 0, len(days)-start)
-	for i := len(days) - 1; i >= start; i-- {
-		d := days[i]
+	for date := range expenses {
+		if !known[date] {
+			merged = append(merged, &model.Day{Date: date})
+		}
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Date < merged[j].Date })
+	start := 0
+	if len(merged) > limit {
+		start = len(merged) - limit
+	}
+	out := make([]dayView, 0, len(merged)-start)
+	for i := len(merged) - 1; i >= start; i-- {
+		d := merged[i]
 		if d.Empty() {
 			continue
 		}
 		v := dayView{Date: shortDate(d.Date), Weekday: report.Weekday(d.Date)}
-		add := func(label, value, class string) {
+		add := func(label, value, class, href string) {
 			if value != "" {
-				v.Metrics = append(v.Metrics, metric{label, value, class})
+				v.Metrics = append(v.Metrics, metric{Label: label, Value: value, Class: class, Href: href})
 			}
 		}
-		if d.Sleep != nil {
-			add("Сон", fmt.Sprintf("%.1f ч", *d.Sleep), "")
+		if d.Wake != nil {
+			add("Подъём", *d.Wake, "", "")
+		}
+		if d.Bed != nil {
+			add("Заснул", *d.Bed, "", "")
+		}
+		if d.Algorithms != nil {
+			add("Алгоритмы", durationValue(*d.Algorithms), "", "")
+		}
+		if d.SystemDesign != nil {
+			add("Системный дизайн", durationValue(*d.SystemDesign), "", "")
 		}
 		if d.Workout != nil {
-			add("Тренировка", *d.Workout, "")
-		}
-		if d.English != nil {
-			add("Английский", fmt.Sprintf("%d мин", *d.English), "")
-		}
-		if d.Work != nil {
-			add("Работа", fmt.Sprintf("%.1f ч", *d.Work), "")
-		}
-		if d.Focus != nil {
-			add("Фокус", fmt.Sprintf("%d/10", *d.Focus), "focus")
+			value, class := "нет", "bad"
+			if *d.Workout {
+				value, class = "да", "good"
+			}
+			add("Тренировка", value, class, "")
 		}
 		if d.Mood != nil {
-			add("Настроение", fmt.Sprintf("%d/10", *d.Mood), "mood")
+			add("Состояние", fmt.Sprintf("%d/10", *d.Mood), "mood", "")
 		}
-		if d.Energy != nil {
-			add("Энергия", fmt.Sprintf("%d/10", *d.Energy), "energy")
-		}
-		if d.Clean != nil {
-			if *d.Clean {
-				add("Чисто", "да", "good")
-			} else {
-				add("Чисто", "нет", "bad")
-			}
-		}
-		if d.Weight != nil {
-			add("Вес", fmt.Sprintf("%.1f кг", *d.Weight), "")
+		if total := expenses[d.Date]; total > 0 {
+			add("Траты", parse.FormatAmount(total)+" ₽", "expense",
+				fmt.Sprintf("/?days=%d&date=%s#expenses", period, d.Date))
 		}
 		out = append(out, v)
 	}
 	return out
+}
+
+func durationValue(minutes int) string {
+	if minutes <= 0 {
+		return "нет"
+	}
+	return fmt.Sprintf("%d мин", minutes)
+}
+
+func expenseTotals(money []*model.Money) map[string]float64 {
+	out := map[string]float64{}
+	for _, m := range money {
+		if m.Kind == model.MoneyExpense {
+			out[m.Date] += m.Amount
+		}
+	}
+	return out
+}
+
+func makeExpenseDetail(date, from, to string, money []*model.Money) *expenseDetail {
+	if date == "" || date < from || date > to {
+		return nil
+	}
+	detail := &expenseDetail{Date: date}
+	categories := map[string]float64{}
+	var total float64
+	for _, m := range money {
+		if m.Date != date || m.Kind != model.MoneyExpense {
+			continue
+		}
+		category := strings.TrimSpace(m.Category)
+		if category == "" {
+			category = "без категории"
+		}
+		total += m.Amount
+		categories[category] += m.Amount
+		detail.Entries = append(detail.Entries, expenseEntry{
+			Category: category,
+			Comment:  m.Comment,
+			Amount:   parse.FormatAmount(m.Amount) + " ₽",
+		})
+	}
+	if len(detail.Entries) == 0 {
+		return nil
+	}
+	detail.Total = parse.FormatAmount(total) + " ₽"
+	for name, amount := range categories {
+		detail.Categories = append(detail.Categories, expenseCategory{
+			Name: name, Amount: parse.FormatAmount(amount) + " ₽",
+		})
+	}
+	sort.Slice(detail.Categories, func(i, j int) bool {
+		return categories[detail.Categories[i].Name] > categories[detail.Categories[j].Name]
+	})
+	return detail
 }
 
 func shortDate(date string) string {
@@ -410,7 +501,7 @@ const pageHTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Личный трекер</title>
+<title>{{.Name}} · Личный трекер</title>
 <style>
 :root{--bg:#0b0d10;--panel:#15181d;--panel2:#1b1f25;--text:#f4f6f8;--muted:#9299a3;--line:#292e36;--green:#86efac;--blue:#7dd3fc;--violet:#c4b5fd;--orange:#fdba74;--red:#fca5a5}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -418,17 +509,18 @@ const pageHTML = `<!doctype html>
 header{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;margin-bottom:26px}h1{font-size:clamp(28px,5vw,46px);letter-spacing:-.04em;margin:0}header p{margin:6px 0 0;color:var(--muted)}
 .periods{display:flex;gap:6px;flex-wrap:wrap}.periods a{color:var(--muted);text-decoration:none;padding:8px 12px;border:1px solid var(--line);border-radius:999px}.periods a.active{background:var(--text);color:var(--bg);border-color:var(--text)}
 .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.card,.panel{background:var(--panel);border:1px solid var(--line);border-radius:18px}.card{padding:18px}.label{color:var(--muted);font-size:13px}.value{font-size:28px;font-weight:720;letter-spacing:-.03em;margin-top:4px}.hint{color:var(--muted);font-size:12px;margin-top:3px}
-section{margin-top:26px}h2{font-size:18px;margin:0 0 10px;letter-spacing:-.01em}.sub{color:var(--muted);font-weight:400}.states{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.state{padding:16px 18px;border-left:3px solid}.state.focus{border-color:var(--blue)}.state.mood{border-color:var(--violet)}.state.energy{border-color:var(--orange)}
+section{margin-top:26px}h2{font-size:18px;margin:0 0 10px;letter-spacing:-.01em}.sub{color:var(--muted);font-weight:400}.states{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.state{padding:16px 18px;border-left:3px solid}.state.mood{border-color:var(--violet)}
 .chart{padding:18px;margin-top:10px;overflow:hidden}.chart svg{display:block;width:100%;height:auto}.axis{stroke:var(--line);stroke-width:1}.axis-label{fill:var(--muted);font-size:11px}.trend{fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.trend.focus,.dot.focus{stroke:var(--blue)}.trend.mood,.dot.mood{stroke:var(--violet)}.trend.energy,.dot.energy{stroke:var(--orange)}.dot{fill:var(--panel);stroke-width:3}.legend{display:flex;gap:16px;justify-content:center;color:var(--muted);font-size:12px;margin-top:8px}.legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}.legend .focus{background:var(--blue)}.legend .mood{background:var(--violet)}.legend .energy{background:var(--orange)}
 .streaks{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;overflow:hidden}.streak{padding:16px;background:var(--panel2)}.streak b{display:block;font-size:20px;margin-top:2px}
 .money{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}.money-card{padding:18px}.money-card h3{margin:0 0 14px}.money-row{display:flex;justify-content:space-between;padding:6px 0;color:var(--muted)}.money-row b{color:var(--text)}.money-row.capital{border-top:1px solid var(--line);margin-top:6px;padding-top:12px}
-.days{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.day{padding:16px}.day-head{display:flex;gap:8px;align-items:baseline;margin-bottom:12px}.day-head b{font-size:17px}.day-head span{color:var(--muted)}.metrics{display:flex;flex-wrap:wrap;gap:7px}.metric{background:var(--panel2);border-radius:9px;padding:7px 9px;font-size:12px}.metric span{color:var(--muted);margin-right:5px}.metric.focus b{color:var(--blue)}.metric.mood b{color:var(--violet)}.metric.energy b{color:var(--orange)}.metric.good b{color:var(--green)}.metric.bad b{color:var(--red)}
+.expense-detail{padding:18px}.expense-total{font-size:28px;font-weight:720;margin:0 0 14px}.expense-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px}.expense-line{display:flex;justify-content:space-between;gap:14px;background:var(--panel2);border-radius:10px;padding:10px 12px}.expense-entries{margin-top:14px;border-top:1px solid var(--line);padding-top:8px}.expense-entry{display:grid;grid-template-columns:1fr 2fr auto;gap:12px;padding:7px 0;color:var(--muted)}.expense-entry b{color:var(--text)}
+.days{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.day{padding:16px}.day-head{display:flex;gap:8px;align-items:baseline;margin-bottom:12px}.day-head b{font-size:17px}.day-head span{color:var(--muted)}.metrics{display:flex;flex-wrap:wrap;gap:7px}.metric{display:block;background:var(--panel2);border-radius:9px;padding:7px 9px;font-size:12px;color:var(--text);text-decoration:none}.metric span{color:var(--muted);margin-right:5px}.metric.mood b{color:var(--violet)}.metric.expense b{color:var(--orange)}.metric.good b{color:var(--green)}.metric.bad b{color:var(--red)}a.metric:hover{outline:1px solid var(--orange)}
 .flags{margin:0;padding:14px 18px 14px 36px}.flags li{padding:4px 0}.empty{color:var(--muted);padding:24px;text-align:center}
 @media(max-width:760px){.wrap{padding-top:22px}header{display:block}.periods{margin-top:16px}.grid{grid-template-columns:repeat(2,1fr)}.states{grid-template-columns:1fr}.streaks{grid-template-columns:repeat(2,1fr)}.days{grid-template-columns:1fr}.chart{padding:10px}.value{font-size:24px}}
 </style>
 </head>
 <body><main class="wrap">
-<header><div><h1>Личный трекер</h1><p>{{.From}} — {{.To}} · заполнено {{.FilledDays}} из {{.TotalDays}}</p></div>
+<header><div><h1>{{.Name}}</h1><p>Личный трекер · {{.From}} — {{.To}} · заполнено {{.FilledDays}} из {{.TotalDays}}</p></div>
 <nav class="periods">{{range .Periods}}<a href="/?days={{.Days}}"{{if .Active}} class="active"{{end}}>{{.Label}}</a>{{end}}</nav></header>
 
 <div class="grid">{{range .Cards}}<article class="card"><div class="label">{{.Label}}</div><div class="value">{{.Value}}</div><div class="hint">{{.Hint}}</div></article>{{end}}</div>
@@ -447,7 +539,12 @@ section{margin-top:26px}h2{font-size:18px;margin:0 0 10px;letter-spacing:-.01em}
 <div class="money-row"><span>Доход</span><b>{{.Income}}</b></div><div class="money-row"><span>Расход</span><b>{{.Expense}}</b></div><div class="money-row"><span>Отложено</span><b>{{.Saved}}</b></div><div class="money-row capital"><span>Капитал</span><b>{{.Capital}}</b></div>
 </article>{{end}}</div></section>{{end}}
 
+{{with .Expense}}<section id="expenses"><h2>Траты за {{.Date}}</h2><article class="panel expense-detail"><div class="expense-total">{{.Total}}</div>
+<div class="expense-grid">{{range .Categories}}<div class="expense-line"><span>{{.Name}}</span><b>{{.Amount}}</b></div>{{end}}</div>
+<div class="expense-entries">{{range .Entries}}<div class="expense-entry"><b>{{.Category}}</b><span>{{.Comment}}</span><b>{{.Amount}}</b></div>{{end}}</div>
+</article></section>{{end}}
+
 {{if .Flags}}<section><h2>Стоит обратить внимание</h2><div class="panel"><ul class="flags">{{range .Flags}}<li>{{.}}</li>{{end}}</ul></div></section>{{end}}
 
-<section><h2>Последние дни</h2>{{if .Days}}<div class="days">{{range .Days}}<article class="panel day"><div class="day-head"><b>{{.Date}}</b><span>{{.Weekday}}</span></div><div class="metrics">{{range .Metrics}}<div class="metric {{.Class}}"><span>{{.Label}}</span><b>{{.Value}}</b></div>{{end}}</div></article>{{end}}</div>{{else}}<div class="panel empty">Пока нет записей. Отправьте боту команду /d.</div>{{end}}</section>
+<section><h2>Последние дни</h2>{{if .Days}}<div class="days">{{range .Days}}<article class="panel day"><div class="day-head"><b>{{.Date}}</b><span>{{.Weekday}}</span></div><div class="metrics">{{range .Metrics}}{{if .Href}}<a href="{{.Href}}" class="metric {{.Class}}"><span>{{.Label}}</span><b>{{.Value}}</b></a>{{else}}<div class="metric {{.Class}}"><span>{{.Label}}</span><b>{{.Value}}</b></div>{{end}}{{end}}</div></article>{{end}}</div>{{else}}<div class="panel empty">Пока нет записей. Отправьте боту команду /d.</div>{{end}}</section>
 </main></body></html>`

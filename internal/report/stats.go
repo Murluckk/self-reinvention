@@ -126,26 +126,15 @@ type Stats struct {
 	TotalDays  int
 	FilledDays int
 
-	Sleep    Series
-	Wake     Series // часы с дробной частью
-	Weight   Series
-	English  Series
-	Work     Series
-	Telegram Series
-	Focus    Series
-	Mood     Series
-	Energy   Series
+	Wake         Series // часы с дробной частью
+	Bed          Series
+	Algorithms   Series // минуты
+	SystemDesign Series // минуты
+	Mood         Series
 
-	Workouts     int
-	WorkoutTypes map[string]int
-	EnglishDays  int
-	EnglishSkips int
-	Shifts       int
-	DaysOff      int
-	MaxNoDayOff  int
-	CleanDays    int
-	CleanKnown   int
-	CleanFails   []string
+	Workouts         int
+	AlgorithmDays    int
+	SystemDesignDays int
 
 	Currencies map[string]*CurrencyStats
 	CurOrder   []string
@@ -171,77 +160,46 @@ type Input struct {
 // Build считает агрегаты по периоду.
 func Build(in Input) *Stats {
 	s := &Stats{
-		From:         in.From,
-		To:           in.To,
-		TotalDays:    DaysBetween(in.From, in.To),
-		WorkoutTypes: map[string]int{},
-		Currencies:   map[string]*CurrencyStats{},
-		Days:         in.Days,
-		Notes:        in.Notes,
+		From: in.From, To: in.To,
+		TotalDays:  DaysBetween(in.From, in.To),
+		Currencies: map[string]*CurrencyStats{},
+		Days:       in.Days,
+		Notes:      in.Notes,
 	}
 	for _, d := range in.Days {
 		if d.Empty() {
 			continue
 		}
 		s.FilledDays++
-		if d.Sleep != nil {
-			s.Sleep.Add(d.Date, *d.Sleep)
-		}
 		if d.Wake != nil {
 			if h, ok := model.TimeToHours(*d.Wake); ok {
 				s.Wake.Add(d.Date, h)
 			}
 		}
-		if d.Weight != nil {
-			s.Weight.Add(d.Date, *d.Weight)
-		}
-		if d.English != nil {
-			s.English.Add(d.Date, float64(*d.English))
-			if *d.English > 0 {
-				s.EnglishDays++
-			} else {
-				s.EnglishSkips++
+		if d.Bed != nil {
+			if h, ok := model.TimeToHours(*d.Bed); ok {
+				s.Bed.Add(d.Date, h)
 			}
 		}
-		if d.Work != nil {
-			s.Work.Add(d.Date, *d.Work)
+		if d.Algorithms != nil {
+			s.Algorithms.Add(d.Date, float64(*d.Algorithms))
+			if *d.Algorithms > 0 {
+				s.AlgorithmDays++
+			}
 		}
-		if d.Telegram != nil {
-			s.Telegram.Add(d.Date, float64(*d.Telegram))
-		}
-		if d.Focus != nil {
-			s.Focus.Add(d.Date, float64(*d.Focus))
+		if d.SystemDesign != nil {
+			s.SystemDesign.Add(d.Date, float64(*d.SystemDesign))
+			if *d.SystemDesign > 0 {
+				s.SystemDesignDays++
+			}
 		}
 		if d.Mood != nil {
 			s.Mood.Add(d.Date, float64(*d.Mood))
 		}
-		if d.Energy != nil {
-			s.Energy.Add(d.Date, float64(*d.Energy))
-		}
-		if d.Workout != nil && *d.Workout != "" && *d.Workout != "нет" {
+		if d.Workout != nil && *d.Workout {
 			s.Workouts++
-			s.WorkoutTypes[*d.Workout]++
-		}
-		if d.Shift != nil && *d.Shift {
-			s.Shifts++
-		}
-		if d.DayOff != nil && *d.DayOff {
-			s.DaysOff++
-		}
-		if d.Clean != nil {
-			s.CleanKnown++
-			if *d.Clean {
-				s.CleanDays++
-			} else {
-				s.CleanFails = append(s.CleanFails, d.Date)
-			}
 		}
 	}
-	// Дни без записи английского — тоже пропуски: цель ежедневная.
-	if unfilled := s.TotalDays - s.English.N(); unfilled > 0 {
-		s.EnglishSkips += unfilled
-	}
-	s.MaxNoDayOff = MaxNoDayOffStreak(in.Days)
 	s.Streaks = ComputeStreaks(in.DaysAll, in.Today)
 
 	for _, m := range in.Money {
@@ -308,33 +266,11 @@ func (s *Stats) Main() *CurrencyStats {
 // один раз и срабатывают сами.
 func flags(s *Stats, cfg *config.Config) []string {
 	var out []string
-	if s.Streaks.FullDaysOff30 < cfg.MinFullDaysOff30 {
-		out = append(out, fmt.Sprintf("полных выходных за 30 дней: %d при норме ≥%d",
-			s.Streaks.FullDaysOff30, cfg.MinFullDaysOff30))
-	}
-	if s.MaxNoDayOff > cfg.MaxStreakNoDayOff {
-		out = append(out, fmt.Sprintf("максимальная серия без выходного: %d дней при пороге %d",
-			s.MaxNoDayOff, cfg.MaxStreakNoDayOff))
-	}
-	if s.Streaks.NoDayOff > cfg.MaxStreakNoDayOff {
-		out = append(out, fmt.Sprintf("без выходного прямо сейчас: %d дней подряд при пороге %d",
-			s.Streaks.NoDayOff, cfg.MaxStreakNoDayOff))
-	}
-	if s.EnglishSkips > cfg.MaxEnglishSkipsWeek {
-		out = append(out, fmt.Sprintf("пропусков английского: %d при норме ≤%d",
-			s.EnglishSkips, cfg.MaxEnglishSkipsWeek))
-	}
-	if s.Sleep.N() > 0 && s.Sleep.Avg() < cfg.MinSleepAvg {
-		out = append(out, fmt.Sprintf("средний сон %.1f ч при норме ≥%.1f", s.Sleep.Avg(), cfg.MinSleepAvg))
-	}
 	if s.Wake.N() > 1 && s.Wake.Spread() > cfg.MaxWakeSpreadH {
 		out = append(out, fmt.Sprintf("разброс подъёма %.1f ч при пороге %.1f", s.Wake.Spread(), cfg.MaxWakeSpreadH))
 	}
 	if rate, ok := s.Main().SavingsRate(); ok && rate < cfg.MinSavingsRate {
 		out = append(out, fmt.Sprintf("норма сбережений %.0f%% при норме ≥%.0f%%", rate*100, cfg.MinSavingsRate*100))
-	}
-	if s.CleanKnown > 0 && s.CleanDays < s.CleanKnown {
-		out = append(out, fmt.Sprintf("чистых дней %d из %d известных", s.CleanDays, s.CleanKnown))
 	}
 	return out
 }

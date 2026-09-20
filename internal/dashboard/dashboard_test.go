@@ -25,22 +25,27 @@ func TestDashboardRequiresPasswordAndRendersData(t *testing.T) {
 	cfg := &config.Config{
 		Location: time.UTC,
 		Users: []config.User{
-			{TelegramID: 1001, DashboardUser: "owner", DashboardPassword: "secret"},
-			{TelegramID: 1002, DashboardUser: "friend", DashboardPassword: "other-secret"},
+			{TelegramID: 1001, Name: "Паша", DashboardUser: "owner", DashboardPassword: "secret"},
+			{TelegramID: 1002, Name: "Света", DashboardUser: "friend", DashboardPassword: "other-secret"},
 		},
-		MinFullDaysOff30: 4, MaxStreakNoDayOff: 12, MaxEnglishSkipsWeek: 1,
-		MinSleepAvg: 7, MaxWakeSpreadH: 1.5, MinSavingsRate: .55,
+		MaxWakeSpreadH: 1.5, MinSavingsRate: .55,
 	}
-	sleep, english, focus, mood, energy := 7.5, 40, 8, 9, 7
-	clean := true
+	wake, algorithms, systems, mood := "07:30", 40, 45, 9
+	workout := true
 	if err := st.UpsertDay(1001, &model.Day{
-		Date: cfg.Today(), Sleep: &sleep, English: &english,
-		Focus: &focus, Mood: &mood, Energy: &energy, Clean: &clean,
+		Date: cfg.Today(), Wake: &wake, Algorithms: &algorithms,
+		SystemDesign: &systems, Mood: &mood, Workout: &workout,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	otherSleep := 9.0
-	if err := st.UpsertDay(1002, &model.Day{Date: cfg.Today(), Sleep: &otherSleep}); err != nil {
+	if err := st.AddMoney(1001, &model.Money{
+		Date: cfg.Today(), TS: time.Now(), Kind: model.MoneyExpense,
+		Amount: 1200, Currency: "RUB", Category: "еда", Comment: "обед",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	otherWake := "09:00"
+	if err := st.UpsertDay(1002, &model.Day{Date: cfg.Today(), Wake: &otherWake}); err != nil {
 		t.Fatal(err)
 	}
 	dash := New(cfg, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -60,17 +65,17 @@ func TestDashboardRequiresPasswordAndRendersData(t *testing.T) {
 		t.Fatalf("с паролем статус %d: %s", res.Code, res.Body.String())
 	}
 	body := res.Body.String()
-	for _, want := range []string{"Личный трекер", "7.5 ч", "8.0/10", "9.0/10", "7.0/10"} {
+	for _, want := range []string{"Паша", "07:30", "40 мин", "45 мин", "9.0/10", "1 200 ₽"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("страница не содержит %q", want)
 		}
 	}
-	for _, unwanted := range []string{"Калории", "Белок"} {
+	for _, unwanted := range []string{"Калории", "Белок", "Английский"} {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("страница содержит удалённое поле %q", unwanted)
 		}
 	}
-	if strings.Contains(body, "9.0 ч") {
+	if strings.Contains(body, "09:00") {
 		t.Fatal("в дашборд первого пользователя попали чужие данные")
 	}
 
@@ -78,8 +83,18 @@ func TestDashboardRequiresPasswordAndRendersData(t *testing.T) {
 	req.SetBasicAuth("friend", "other-secret")
 	res = httptest.NewRecorder()
 	dash.Handler().ServeHTTP(res, req)
-	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "9.0 ч") {
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "Света") ||
+		!strings.Contains(res.Body.String(), "09:00") {
 		t.Fatalf("дашборд второго пользователя: %d %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/?days=7&date="+cfg.Today(), nil)
+	req.SetBasicAuth("owner", "secret")
+	res = httptest.NewRecorder()
+	dash.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "Траты за") ||
+		!strings.Contains(res.Body.String(), "еда") || !strings.Contains(res.Body.String(), "обед") {
+		t.Fatalf("детали расходов: %d %s", res.Code, res.Body.String())
 	}
 }
 

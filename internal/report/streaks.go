@@ -4,11 +4,10 @@ import "github.com/murluckk/self-reinvention/internal/model"
 
 // Streaks — счётчики, которые показывает /s.
 type Streaks struct {
-	Clean         int // дней подряд «чисто»
-	English       int // дней подряд с английским
-	NoDayOff      int // дней подряд без полного выходного
-	FullDaysOff30 int // полных выходных за последние 30 дней
-	Filled        int // дней подряд с заполненной записью
+	Algorithms   int // дней подряд с алгоритмами
+	SystemDesign int // дней подряд с системным дизайном
+	Workout      int // дней подряд с тренировкой
+	Filled       int // дней подряд с заполненной записью
 }
 
 // tri — троичный ответ предиката: да, нет и «нет данных».
@@ -51,16 +50,6 @@ func streak(idx map[string]*model.Day, today, first string, unknownContinues boo
 	return n
 }
 
-func boolTri(p *bool) tri {
-	if p == nil {
-		return triUnknown
-	}
-	if *p {
-		return triYes
-	}
-	return triNo
-}
-
 // ComputeStreaks считает стрики по всем известным дням. days должны быть
 // отсортированы по дате; today задаёт точку отсчёта.
 func ComputeStreaks(days []*model.Day, today string) Streaks {
@@ -76,23 +65,32 @@ func ComputeStreaks(days []*model.Day, today string) Streaks {
 		}
 	}
 	s := Streaks{}
-	s.Clean = streak(idx, today, first, false, func(d *model.Day) tri { return boolTri(d.Clean) })
-	s.English = streak(idx, today, first, false, func(d *model.Day) tri {
-		if d.English == nil {
+	duration := func(value func(*model.Day) *int) func(*model.Day) tri {
+		return func(d *model.Day) tri {
+			v := value(d)
+			if v == nil {
+				return triUnknown
+			}
+			if *v > 0 {
+				return triYes
+			}
+			return triNo
+		}
+	}
+	s.Algorithms = streak(idx, today, first, false, duration(func(d *model.Day) *int {
+		return d.Algorithms
+	}))
+	s.SystemDesign = streak(idx, today, first, false, duration(func(d *model.Day) *int {
+		return d.SystemDesign
+	}))
+	s.Workout = streak(idx, today, first, false, func(d *model.Day) tri {
+		if d.Workout == nil {
 			return triUnknown
 		}
-		if *d.English > 0 {
+		if *d.Workout {
 			return triYes
 		}
 		return triNo
-	})
-	// Полный выходной обрывает серию перегруза; день без записи считаем рабочим,
-	// потому что выходной человек отмечает, а обычный день может и забыть.
-	s.NoDayOff = streak(idx, today, first, true, func(d *model.Day) tri {
-		if d.DayOff != nil && *d.DayOff {
-			return triNo
-		}
-		return triYes
 	})
 	s.Filled = streak(idx, today, first, false, func(d *model.Day) tri {
 		if d.Empty() {
@@ -100,29 +98,5 @@ func ComputeStreaks(days []*model.Day, today string) Streaks {
 		}
 		return triYes
 	})
-	from := AddDays(today, -29)
-	for date, d := range idx {
-		if date >= from && date <= today && d.DayOff != nil && *d.DayOff {
-			s.FullDaysOff30++
-		}
-	}
 	return s
-}
-
-// MaxNoDayOffStreak возвращает самую длинную серию дней подряд без полного
-// выходного внутри периода — в отличие от Streaks.NoDayOff, который считает
-// серию на сегодня.
-func MaxNoDayOffStreak(days []*model.Day) int {
-	best, cur := 0, 0
-	for _, d := range days {
-		if d.DayOff != nil && *d.DayOff {
-			cur = 0
-			continue
-		}
-		cur++
-		if cur > best {
-			best = cur
-		}
-	}
-	return best
 }

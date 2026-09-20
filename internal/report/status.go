@@ -35,15 +35,10 @@ func Status(today *model.Day, week *Stats) string {
 
 	p("")
 	p("🗓 Неделя %s — %s: %d/%d дней", week.From, week.To, week.FilledDays, week.TotalDays)
-	if week.Sleep.N() > 0 {
-		p("  сон: %.1f ч в среднем", week.Sleep.Avg())
-	}
-	p("  тренировок: %d, английский: %.0f мин", week.Workouts, week.English.Sum())
-	if week.Work.N() > 0 {
-		p("  работа: %.1f ч, выходных: %d, смен: %d", week.Work.Sum(), week.DaysOff, week.Shifts)
-	}
-	if week.CleanKnown > 0 {
-		p("  чисто: %d из %d", week.CleanDays, week.CleanKnown)
+	p("  алгоритмы: %.0f мин, системный дизайн: %.0f мин", week.Algorithms.Sum(), week.SystemDesign.Sum())
+	p("  тренировок: %d", week.Workouts)
+	if week.Mood.N() > 0 {
+		p("  состояние: %.1f/10", week.Mood.Avg())
 	}
 
 	p("")
@@ -64,10 +59,9 @@ func Status(today *model.Day, week *Stats) string {
 
 	p("")
 	p("🔥 Стрики")
-	p("  чисто: %d дн.", week.Streaks.Clean)
-	p("  английский: %d дн.", week.Streaks.English)
-	p("  без полного выходного: %d дн.", week.Streaks.NoDayOff)
-	p("  полных выходных за 30 дней: %d", week.Streaks.FullDaysOff30)
+	p("  алгоритмы: %d дн.", week.Streaks.Algorithms)
+	p("  системный дизайн: %d дн.", week.Streaks.SystemDesign)
+	p("  тренировки: %d дн.", week.Streaks.Workout)
 	p("  записей подряд: %d дн.", week.Streaks.Filled)
 
 	if len(week.Flags) > 0 {

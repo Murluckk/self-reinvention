@@ -16,10 +16,11 @@ import (
 
 // Job — задача по расписанию.
 type Job struct {
-	Name    string        // ключ в таблице jobs
-	At      string        // время срабатывания HH:MM в часовом поясе конфига
-	Weekday *time.Weekday // если задан, срабатывает только в этот день недели
-	Run     func(context.Context) error
+	Name       string        // ключ в таблице jobs
+	At         string        // время срабатывания HH:MM в часовом поясе конфига
+	Weekday    *time.Weekday // если задан, срабатывает только в этот день недели
+	DayOfMonth int           // если > 0, срабатывает только в это число месяца
+	Run        func(context.Context) error
 }
 
 // Scheduler запускает задачи и помнит, что уже отправлял.
@@ -56,6 +57,9 @@ func (s *Scheduler) tick(ctx context.Context) {
 	nowMin := now.Hour()*60 + now.Minute()
 	for _, j := range s.jobs {
 		if j.Weekday != nil && now.Weekday() != *j.Weekday {
+			continue
+		}
+		if j.DayOfMonth > 0 && now.Day() != j.DayOfMonth {
 			continue
 		}
 		at, err := minutes(j.At)

@@ -16,12 +16,13 @@ import (
 type Kind string
 
 const (
-	KindFloat  Kind = "float"  // произвольное дробное число
-	KindInt    Kind = "int"    // целое
-	KindScale  Kind = "scale"  // целое 1..10
-	KindBool   Kind = "bool"   // да/нет
-	KindString Kind = "string" // произвольная строка
-	KindTime   Kind = "time"   // время суток HH:MM
+	KindFloat    Kind = "float"    // произвольное дробное число
+	KindInt      Kind = "int"      // целое
+	KindDuration Kind = "duration" // минуты занятия; 0 означает «не занимался»
+	KindScale    Kind = "scale"    // целое 1..10
+	KindBool     Kind = "bool"     // да/нет
+	KindString   Kind = "string"   // произвольная строка
+	KindTime     Kind = "time"     // время суток HH:MM
 )
 
 // Day — запись за один день. Все поля, кроме даты, опциональны: запись
@@ -30,22 +31,13 @@ const (
 type Day struct {
 	Date string `db:"date"`
 
-	Sleep    *float64 `db:"sleep"    key:"сон,спал,sleep"          kind:"float"  label:"Сон"        unit:"ч"   desc:"часы сна за ночь"`
-	Wake     *string  `db:"wake"     key:"подъем,подъём,встал,wake" kind:"time"   label:"Подъём"                desc:"время подъёма, HH:MM"`
-	Bed      *string  `db:"bed"      key:"отбой,лег,лёг,bed"        kind:"time"   label:"Отбой"                 desc:"время отбоя, HH:MM"`
-	Workout  *string  `db:"workout"  key:"трен,тренировка,workout"  kind:"string" label:"Тренировка"            desc:"тип тренировки: зал, бег, улица или нет"`
-	Weight   *float64 `db:"weight"   key:"вес,weight"               kind:"float"  label:"Вес"        unit:"кг" desc:"вес тела в килограммах"`
-	English  *int     `db:"english"  key:"англ,английский,english"  kind:"int"    label:"Английский" unit:"мин" desc:"минут английского"`
-	Cooked   *bool    `db:"cooked"   key:"готовил,cooked"           kind:"bool"   label:"Готовил"               desc:"готовил ли еду сам"`
-	Work     *float64 `db:"work"     key:"работа,work"              kind:"float"  label:"Работа"     unit:"ч"  desc:"часов работы"`
-	DayOff   *bool    `db:"day_off"  key:"выходной,dayoff"          kind:"bool"   label:"Выходной"              desc:"полный день без работы"`
-	Shift    *bool    `db:"shift"    key:"смена,shift"              kind:"bool"   label:"Смена"                 desc:"оплачиваемый рабочий выходной"`
-	Focus    *int     `db:"focus"    key:"фокус,focus"              kind:"scale"  label:"Фокус"                 desc:"концентрация по шкале 1-10"`
-	Mood     *int     `db:"mood"     key:"настроение,mood"          kind:"scale"  label:"Настроение"            desc:"настроение по шкале 1-10"`
-	Energy   *int     `db:"energy"   key:"энергия,energy"           kind:"scale"  label:"Энергия"               desc:"энергия по шкале 1-10"`
-	Telegram *int     `db:"telegram" key:"тг,телеграм,tg"           kind:"int"    label:"Телеграм"              desc:"сколько раз залезал в телеграм вне разрешённых окон"`
-	Clean    *bool    `db:"clean"    key:"чисто,clean"              kind:"bool"   label:"Чисто"                 desc:"день без алкоголя и без порно"`
-	Note     *string  `db:"note"     key:"note,заметка,коммент"     kind:"string" label:"Заметка"               desc:"свободный комментарий к дню" rest:"true"`
+	Wake         *string `db:"wake"          key:"подъем,подъём,встал,wake"          kind:"time"     label:"Подъём"             desc:"время подъёма, HH:MM"`
+	Bed          *string `db:"bed"           key:"отбой,заснул,лег,лёг,bed"           kind:"time"     label:"Заснул"             desc:"время засыпания, HH:MM"`
+	Algorithms   *int    `db:"algorithms"    key:"алго,алгоритмы,algorithms"          kind:"duration" label:"Алгоритмы"          desc:"минуты алгоритмов; 0 если не занимался"`
+	SystemDesign *int    `db:"system_design" key:"системы,системдизайн,systemdesign"  kind:"duration" label:"Системный дизайн"   desc:"минуты системного дизайна; 0 если не занимался"`
+	Workout      *bool   `db:"workout"       key:"трен,тренировка,workout"            kind:"bool"     label:"Тренировка"         desc:"была ли тренировка"`
+	Mood         *int    `db:"mood"          key:"состояние,настроение,mood"          kind:"scale"    label:"Состояние"          desc:"эмоциональное состояние по шкале 1-10"`
+	Note         *string `db:"note"          key:"note,заметка,коммент"               kind:"string"   label:"Заметка"            desc:"свободный комментарий к дню" rest:"true"`
 }
 
 // Field — описание одного поля записи дня, собранное из тегов структуры.
@@ -151,7 +143,25 @@ func (f *Field) SetAny(d *Day, v any) error {
 			return err
 		}
 		f.set(d, reflect.ValueOf(x))
-	case KindInt, KindScale:
+	case KindInt, KindScale, KindDuration:
+		if f.Kind == KindDuration {
+			if b, ok := v.(bool); ok {
+				if b {
+					return fmt.Errorf("для %s укажи время в минутах", f.Label)
+				}
+				f.set(d, reflect.ValueOf(0))
+				return nil
+			}
+			if s, ok := v.(string); ok {
+				if b, err := ParseBool(s); err == nil {
+					if b {
+						return fmt.Errorf("для %s укажи время в минутах", f.Label)
+					}
+					f.set(d, reflect.ValueOf(0))
+					return nil
+				}
+			}
+		}
 		x, err := toFloat(v)
 		if err != nil {
 			return err
@@ -274,6 +284,12 @@ func (f *Field) FormatValue(d *Day) string {
 	case *float64:
 		s = strings.TrimSuffix(strings.TrimRight(fmt.Sprintf("%.2f", *x), "0"), ".")
 	case *int:
+		if f.Kind == KindDuration {
+			if *x == 0 {
+				return "нет"
+			}
+			return fmt.Sprintf("да · %d мин", *x)
+		}
 		s = fmt.Sprint(*x)
 	case *bool:
 		if *x {

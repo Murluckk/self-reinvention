@@ -15,7 +15,7 @@ func TestHelpListsEveryKey(t *testing.T) {
 			t.Fatalf("в /help нет ключа %q", f.Keys[0])
 		}
 	}
-	for _, want := range []string{"/d", "/m", "/s", "/w", "/undo", "/help", "23:00", "12:40"} {
+	for _, want := range []string{"/d", "/m", "/s", "/w", "/undo", "/help", "23:00", "5-го", "20-го"} {
 		if !strings.Contains(helpText, want) {
 			t.Fatalf("в /help нет %q", want)
 		}

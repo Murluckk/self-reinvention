@@ -144,12 +144,12 @@ func ParseDay(args, today string) DayCommand {
 
 // bareValues — сокращения, которые можно писать без ключа.
 var bareValues = map[string]struct{ col, val string }{
-	"зал":      {"workout", "зал"},
-	"качалка":  {"workout", "зал"},
-	"бег":      {"workout", "бег"},
-	"пробежка": {"workout", "бег"},
-	"улица":    {"workout", "улица"},
-	"турник":   {"workout", "улица"},
+	"зал":      {"workout", "да"},
+	"качалка":  {"workout", "да"},
+	"бег":      {"workout", "да"},
+	"пробежка": {"workout", "да"},
+	"улица":    {"workout", "да"},
+	"турник":   {"workout", "да"},
 	"безтрена": {"workout", "нет"},
 	"отдых":    {"workout", "нет"},
 }
@@ -164,7 +164,7 @@ func setField(d *model.Day, f *model.Field, val string) error {
 		return fmt.Errorf("пустое значение")
 	}
 	switch f.Kind {
-	case model.KindFloat, model.KindInt, model.KindScale:
+	case model.KindFloat, model.KindInt, model.KindScale, model.KindDuration:
 		if m := unitSuffix.FindStringSubmatch(val); m != nil {
 			val = m[1]
 		}

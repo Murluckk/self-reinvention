@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -55,14 +56,27 @@ func main() {
 	var jobs []scheduler.Job
 	for _, user := range cfg.Users {
 		userID := user.TelegramID
+		jobID := strconv.FormatInt(userID, 10)
 		jobs = append(jobs,
 			scheduler.Job{
-				Name: "daily_reminder:" + user.DashboardUser, At: cfg.DailyReminder,
+				Name: "daily_reminder:" + jobID, At: cfg.DailyReminder,
 				Run: func(ctx context.Context) error { return b.RemindDay(ctx, userID) },
 			},
 			scheduler.Job{
-				Name: "weekly_report:" + user.DashboardUser, At: cfg.WeeklyReport, Weekday: &sunday,
+				Name: "weekly_report:" + jobID, At: cfg.WeeklyReport, Weekday: &sunday,
 				Run: func(ctx context.Context) error { return b.SendWeekly(ctx, userID) },
+			},
+			scheduler.Job{
+				Name: "salary_reminder:" + jobID, At: cfg.IncomeReminder, DayOfMonth: 5,
+				Run: func(ctx context.Context) error { return b.RemindIncome(ctx, userID, "зарплата") },
+			},
+			scheduler.Job{
+				Name: "advance_reminder:" + jobID, At: cfg.IncomeReminder, DayOfMonth: 20,
+				Run: func(ctx context.Context) error { return b.RemindIncome(ctx, userID, "аванс") },
+			},
+			scheduler.Job{
+				Name: "monthly_finance:" + jobID, At: cfg.MonthlyFinance, DayOfMonth: 1,
+				Run: func(ctx context.Context) error { return b.SendMonthlyFinance(ctx, userID) },
 			},
 		)
 	}

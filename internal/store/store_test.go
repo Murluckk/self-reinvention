@@ -22,34 +22,33 @@ func open(t *testing.T) *Store {
 	return s
 }
 
-func f(v float64) *float64 { return &v }
-func i(v int) *int         { return &v }
-func s(v string) *string   { return &v }
-func bp(v bool) *bool      { return &v }
+func i(v int) *int       { return &v }
+func s(v string) *string { return &v }
+func bp(v bool) *bool    { return &v }
 
 // Главное свойство хранилища: дописывание не затирает уже записанное.
 func TestUpsertDayMergesPartialWrites(t *testing.T) {
 	st := open(t)
-	if err := st.UpsertDay(testUserID, &model.Day{Date: "2026-08-24", Sleep: f(7.5), English: i(40)}); err != nil {
+	if err := st.UpsertDay(testUserID, &model.Day{Date: "2026-08-24", Wake: s("07:30"), Algorithms: i(40)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.UpsertDay(testUserID, &model.Day{Date: "2026-08-24", English: i(60), Clean: bp(true), Workout: s("зал")}); err != nil {
+	if err := st.UpsertDay(testUserID, &model.Day{Date: "2026-08-24", Algorithms: i(60), Mood: i(8), Workout: bp(true)}); err != nil {
 		t.Fatal(err)
 	}
 	d, err := st.GetDay(testUserID, "2026-08-24")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Sleep == nil || *d.Sleep != 7.5 {
-		t.Fatalf("сон затёрся: %v", d.Sleep)
+	if d.Wake == nil || *d.Wake != "07:30" {
+		t.Fatalf("подъём затёрся: %v", d.Wake)
 	}
-	if d.English == nil || *d.English != 60 {
-		t.Fatalf("английский не обновился: %v", d.English)
+	if d.Algorithms == nil || *d.Algorithms != 60 {
+		t.Fatalf("алгоритмы не обновились: %v", d.Algorithms)
 	}
-	if d.Clean == nil || !*d.Clean {
-		t.Fatalf("чисто не записалось: %v", d.Clean)
+	if d.Mood == nil || *d.Mood != 8 {
+		t.Fatalf("состояние не записалось: %v", d.Mood)
 	}
-	if d.Workout == nil || *d.Workout != "зал" {
+	if d.Workout == nil || !*d.Workout {
 		t.Fatalf("тренировка не записалась: %v", d.Workout)
 	}
 }
@@ -67,21 +66,21 @@ func TestGetDayMissingReturnsEmpty(t *testing.T) {
 
 func TestUsersHaveIndependentDays(t *testing.T) {
 	st := open(t)
-	sleepA, sleepB := 6.0, 9.0
-	if err := st.UpsertDay(1, &model.Day{Date: "2026-08-24", Sleep: &sleepA}); err != nil {
+	algorithmsA, algorithmsB := 30, 90
+	if err := st.UpsertDay(1, &model.Day{Date: "2026-08-24", Algorithms: &algorithmsA}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.UpsertDay(2, &model.Day{Date: "2026-08-24", Sleep: &sleepB}); err != nil {
+	if err := st.UpsertDay(2, &model.Day{Date: "2026-08-24", Algorithms: &algorithmsB}); err != nil {
 		t.Fatal(err)
 	}
 	a, _ := st.GetDay(1, "2026-08-24")
 	b, _ := st.GetDay(2, "2026-08-24")
-	if a.Sleep == nil || *a.Sleep != 6 || b.Sleep == nil || *b.Sleep != 9 {
+	if a.Algorithms == nil || *a.Algorithms != 30 || b.Algorithms == nil || *b.Algorithms != 90 {
 		t.Fatalf("данные смешались: a=%+v b=%+v", a, b)
 	}
 }
 
-func TestMigrationConvertsFivePointRatingsOnce(t *testing.T) {
+func TestMigrationDiscardsLegacyDayData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -105,8 +104,8 @@ func TestMigrationConvertsFivePointRatingsOnce(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if d.Focus == nil || *d.Focus != 6 || d.Mood == nil || *d.Mood != 8 || d.Energy == nil || *d.Energy != 10 {
-			t.Fatalf("попытка %d: оценки %+v", attempt+1, d)
+		if !d.Empty() {
+			t.Fatalf("попытка %d: старые данные не отброшены: %+v", attempt+1, d)
 		}
 		if err := st.Close(); err != nil {
 			t.Fatal(err)
@@ -116,7 +115,7 @@ func TestMigrationConvertsFivePointRatingsOnce(t *testing.T) {
 
 func TestBackupCreatesReadableDatabase(t *testing.T) {
 	st := open(t)
-	if err := st.UpsertDay(testUserID, &model.Day{Date: "2026-08-24", Sleep: f(7.5)}); err != nil {
+	if err := st.UpsertDay(testUserID, &model.Day{Date: "2026-08-24", Wake: s("07:30")}); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "backup", "tracker.db")
@@ -133,7 +132,7 @@ func TestBackupCreatesReadableDatabase(t *testing.T) {
 	}
 	defer copy.Close()
 	d, err := copy.GetDay(testUserID, "2026-08-24")
-	if err != nil || d.Sleep == nil || *d.Sleep != 7.5 {
+	if err != nil || d.Wake == nil || *d.Wake != "07:30" {
 		t.Fatalf("backup не читается: day=%+v err=%v", d, err)
 	}
 }
@@ -141,7 +140,7 @@ func TestBackupCreatesReadableDatabase(t *testing.T) {
 func TestDaysRange(t *testing.T) {
 	st := open(t)
 	for _, date := range []string{"2026-08-17", "2026-08-18", "2026-08-24", "2026-08-25"} {
-		if err := st.UpsertDay(testUserID, &model.Day{Date: date, Sleep: f(7)}); err != nil {
+		if err := st.UpsertDay(testUserID, &model.Day{Date: date, Wake: s("07:00")}); err != nil {
 			t.Fatal(err)
 		}
 	}
