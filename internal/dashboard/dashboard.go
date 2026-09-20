@@ -295,6 +295,8 @@ func (d *Dashboard) page(userID int64, period int, selectedDate string) (*pageDa
 			{"Прогулки", strconv.Itoa(stats.Walks), "за период"},
 			{"Учёба", strconv.Itoa(stats.StudyDays), "дней"},
 			{"Полезные занятия", strconv.Itoa(stats.UsefulDays), "дней"},
+			{"Сладкое", fmt.Sprintf("%d дн.", stats.SweetDays), fmt.Sprintf("из %d отмеченных", stats.SweetKnown)},
+			{"Алкоголь", fmt.Sprintf("%d дн.", stats.AlcoholDays), fmt.Sprintf("из %d отмеченных", stats.AlcoholKnown)},
 		}
 		p.Streaks = []streak{
 			{"Учёба", fmt.Sprintf("%d дн.", stats.Streaks.Study)},

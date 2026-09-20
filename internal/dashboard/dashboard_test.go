@@ -90,6 +90,8 @@ func TestDashboardRequiresPasswordAndRendersData(t *testing.T) {
 	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "Света") ||
 		!strings.Contains(res.Body.String(), "09:00") ||
 		!strings.Contains(res.Body.String(), "Прогулки") ||
+		!strings.Contains(res.Body.String(), "Сладкое") ||
+		!strings.Contains(res.Body.String(), "Алкоголь") ||
 		!strings.Contains(res.Body.String(), "книга по психологии") {
 		t.Fatalf("дашборд второго пользователя: %d %s", res.Code, res.Body.String())
 	}
