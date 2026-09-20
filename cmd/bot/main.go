@@ -41,7 +41,15 @@ func main() {
 	if cfg.LLMAPIKey != "" {
 		llmClient = llm.NewOpenAI(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel)
 	}
-	b := bot.New(cfg, tg.New(cfg.BotToken), st, asr.New(cfg.ASRURL), llmClient, log)
+	localASR := asr.New(cfg.ASRURL)
+	primaryASR, fallbackASR := localASR, (*asr.Client)(nil)
+	if cfg.LLMAPIKey != "" {
+		primaryASR = asr.NewOpenAI(
+			cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.TranscribeModel, cfg.TranscribePrompt,
+		)
+		fallbackASR = localASR
+	}
+	b := bot.New(cfg, tg.New(cfg.BotToken), st, primaryASR, fallbackASR, llmClient, log)
 
 	sunday := cfg.WeeklyWeekday
 	var jobs []scheduler.Job

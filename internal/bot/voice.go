@@ -134,6 +134,21 @@ func (b *Bot) transcribe(ctx context.Context, v *tg.Voice) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	target := b.asr
+	var cloudErr error
+	if b.asr.DirectAudio() {
+		name := cloudAudioName(f.FilePath)
+		if text, err := b.asr.Transcribe(ctx, data, name); err == nil {
+			return text, nil
+		} else {
+			cloudErr = err
+			b.log.Warn("облачное распознавание недоступно, пробую локальное", "err", err)
+		}
+		target = b.asrFallback
+		if target == nil {
+			return "", cloudErr
+		}
+	}
 	dir, err := os.MkdirTemp("", "voice")
 	if err != nil {
 		return "", err
@@ -148,13 +163,31 @@ func (b *Bot) transcribe(ctx context.Context, v *tg.Voice) (string, error) {
 	defer cancel()
 	cmd := exec.CommandContext(cctx, "ffmpeg", "-y", "-loglevel", "error", "-i", in, "-ar", "16000", "-ac", "1", out)
 	if stderr, err := cmd.CombinedOutput(); err != nil {
+		if cloudErr != nil {
+			return "", fmt.Errorf("облачный ASR: %v; локальный ffmpeg: %v: %s", cloudErr, err, strings.TrimSpace(string(stderr)))
+		}
 		return "", fmt.Errorf("ffmpeg: %v: %s", err, strings.TrimSpace(string(stderr)))
 	}
 	wav, err := os.ReadFile(out)
 	if err != nil {
 		return "", err
 	}
-	return b.asr.Transcribe(ctx, wav, "voice.wav")
+	text, err := target.Transcribe(ctx, wav, "voice.wav")
+	if err != nil && cloudErr != nil {
+		return "", fmt.Errorf("облачный ASR: %v; локальный ASR: %w", cloudErr, err)
+	}
+	return text, err
+}
+
+func cloudAudioName(path string) string {
+	name := filepath.Base(path)
+	if name == "." || name == "" {
+		return "voice.ogg"
+	}
+	if e := filepath.Ext(name); strings.EqualFold(e, ".oga") {
+		return strings.TrimSuffix(name, e) + ".ogg"
+	}
+	return name
 }
 
 func ext(path string) string {

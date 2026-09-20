@@ -20,12 +20,13 @@ import (
 
 // Bot — главный объект приложения.
 type Bot struct {
-	cfg *config.Config
-	tg  *tg.Client
-	st  *store.Store
-	asr *asr.Client
-	llm *llm.Client
-	log *slog.Logger
+	cfg         *config.Config
+	tg          *tg.Client
+	st          *store.Store
+	asr         *asr.Client
+	asrFallback *asr.Client
+	llm         *llm.Client
+	log         *slog.Logger
 
 	mu      sync.Mutex
 	pending map[string]*pending
@@ -33,8 +34,11 @@ type Bot struct {
 }
 
 // New собирает бота из готовых зависимостей.
-func New(cfg *config.Config, client *tg.Client, st *store.Store, a *asr.Client, l *llm.Client, log *slog.Logger) *Bot {
-	return &Bot{cfg: cfg, tg: client, st: st, asr: a, llm: l, log: log, pending: map[string]*pending{}}
+func New(cfg *config.Config, client *tg.Client, st *store.Store, a, fallback *asr.Client, l *llm.Client, log *slog.Logger) *Bot {
+	return &Bot{
+		cfg: cfg, tg: client, st: st, asr: a, asrFallback: fallback,
+		llm: l, log: log, pending: map[string]*pending{},
+	}
 }
 
 // Run крутит long polling до отмены контекста.

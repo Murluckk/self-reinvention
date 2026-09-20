@@ -34,6 +34,8 @@ type Config struct {
 	LLMAPIKey         string
 	LLMBaseURL        string
 	LLMModel          string
+	TranscribeModel   string
+	TranscribePrompt  string
 	BackupDir         string
 	DailyBackup       string
 
@@ -55,17 +57,22 @@ type Config struct {
 // Load собирает конфиг из окружения и проверяет обязательные поля.
 func Load() (*Config, error) {
 	c := &Config{
-		BotToken:            os.Getenv("BOT_TOKEN"),
-		DataPath:            env("DATA_PATH", "./data/tracker.db"),
-		ASRURL:              env("ASR_URL", "http://127.0.0.1:8081/transcribe"),
-		OllamaURL:           env("OLLAMA_URL", "http://127.0.0.1:11434"),
-		OllamaModel:         env("OLLAMA_MODEL", "qwen2.5:7b-instruct"),
-		DashboardAddr:       os.Getenv("DASHBOARD_ADDR"),
-		DashboardUser:       env("DASHBOARD_USER", "tracker"),
-		DashboardPassword:   os.Getenv("DASHBOARD_PASSWORD"),
-		LLMAPIKey:           os.Getenv("LLM_API_KEY"),
-		LLMBaseURL:          env("LLM_BASE_URL", "https://api.openai.com/v1"),
-		LLMModel:            env("LLM_MODEL", "gpt-5.4-mini"),
+		BotToken:          os.Getenv("BOT_TOKEN"),
+		DataPath:          env("DATA_PATH", "./data/tracker.db"),
+		ASRURL:            env("ASR_URL", "http://127.0.0.1:8081/transcribe"),
+		OllamaURL:         env("OLLAMA_URL", "http://127.0.0.1:11434"),
+		OllamaModel:       env("OLLAMA_MODEL", "qwen2.5:7b-instruct"),
+		DashboardAddr:     os.Getenv("DASHBOARD_ADDR"),
+		DashboardUser:     env("DASHBOARD_USER", "tracker"),
+		DashboardPassword: os.Getenv("DASHBOARD_PASSWORD"),
+		LLMAPIKey:         os.Getenv("LLM_API_KEY"),
+		LLMBaseURL:        env("LLM_BASE_URL", "https://api.openai.com/v1"),
+		LLMModel:          env("LLM_MODEL", "gpt-5.4-mini"),
+		TranscribeModel:   env("TRANSCRIBE_MODEL", "gpt-transcribe"),
+		TranscribePrompt: env("TRANSCRIBE_PROMPT",
+			"Русский личный дневник. Точно записывай числа и время цифрами. "+
+				"Термины: сон, подъём, отбой, зал, бег, английский, вес, работа, "+
+				"выходной, смена, фокус, настроение, энергия, телеграм, чисто."),
 		BackupDir:           env("BACKUP_DIR", "./data/backups"),
 		DailyBackup:         env("DAILY_BACKUP", "04:00"),
 		MinFullDaysOff30:    envInt("MIN_FULL_DAYS_OFF_30", 4),

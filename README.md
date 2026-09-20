@@ -111,7 +111,8 @@ JSON-схемы для LLM, текста `/help` и списка незапол�
 ## Голосовой ввод
 
 ```
-voice → getFile → ffmpeg -i in.oga -ar 16000 -ac 1 out.wav → ASR → парсер → подтверждение → запись
+voice → OpenAI gpt-transcribe → GPT JSON-парсер → подтверждение → запись
+                  ↘ при ошибке: ffmpeg → локальный Whisper ↗
 ```
 
 **Двухуровневый парсинг.** Каждая расшифровка отправляется в LLM API. Регулярки
@@ -199,6 +200,8 @@ sqlite3 /opt/tracker/data/tracker.db "SELECT ts, level, raw, parsed FROM voice O
 | `LLM_API_KEY` | для GPT API | — |
 | `LLM_BASE_URL` | нет | `https://api.openai.com/v1` |
 | `LLM_MODEL` | нет | `gpt-5.4-mini` |
+| `TRANSCRIBE_MODEL` | нет | `gpt-transcribe` |
+| `TRANSCRIBE_PROMPT` | нет | словарь трекера и инструкция по числам |
 | `OLLAMA_URL` | нет | `http://127.0.0.1:11434` |
 | `OLLAMA_MODEL` | нет | `qwen2.5:7b-instruct` |
 | `DASHBOARD_ADDR` | нет | — (дашборд выключен) |

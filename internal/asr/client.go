@@ -1,6 +1,4 @@
-// Package asr — клиент к локальному сервису распознавания речи. Сам ML живёт в
-// отдельном питоновском процессе (faster-whisper + FastAPI), Go-бот только
-// отправляет туда wav и получает текст.
+// Package asr — клиенты облачного Transcriptions API и локального Whisper.
 package asr
 
 import (
@@ -11,13 +9,18 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strings"
 	"time"
 )
 
 // Client — HTTP-клиент ASR-сервиса.
 type Client struct {
-	url  string
-	http *http.Client
+	url         string
+	apiKey      string
+	model       string
+	prompt      string
+	directAudio bool
+	http        *http.Client
 }
 
 // New создаёт клиента. Таймаут щедрый: распознавание минутного голосового на
@@ -26,21 +29,44 @@ func New(url string) *Client {
 	return &Client{url: url, http: &http.Client{Timeout: 5 * time.Minute}}
 }
 
+// NewOpenAI создаёт клиент OpenAI-compatible Transcriptions API. Он принимает
+// исходный OGG/OGA из Telegram без промежуточного ffmpeg.
+func NewOpenAI(baseURL, apiKey, model, prompt string) *Client {
+	return &Client{
+		url:         strings.TrimRight(baseURL, "/") + "/audio/transcriptions",
+		apiKey:      apiKey,
+		model:       model,
+		prompt:      prompt,
+		directAudio: true,
+		http:        &http.Client{Timeout: 5 * time.Minute},
+	}
+}
+
+// DirectAudio сообщает, можно ли отправить исходный Telegram-файл без WAV.
+func (c *Client) DirectAudio() bool { return c.directAudio }
+
 type response struct {
 	Text     string  `json:"text"`
 	Language string  `json:"language"`
 	Duration float64 `json:"duration"`
 }
 
-// Transcribe отправляет wav в сервис и возвращает расшифровку.
-func (c *Client) Transcribe(ctx context.Context, wav []byte, filename string) (string, error) {
+// Transcribe отправляет аудиофайл в сервис и возвращает расшифровку.
+func (c *Client) Transcribe(ctx context.Context, audio []byte, filename string) (string, error) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
+	if c.directAudio {
+		_ = w.WriteField("model", c.model)
+		_ = w.WriteField("language", "ru")
+		if c.prompt != "" {
+			_ = w.WriteField("prompt", c.prompt)
+		}
+	}
 	part, err := w.CreateFormFile("file", filename)
 	if err != nil {
 		return "", err
 	}
-	if _, err := part.Write(wav); err != nil {
+	if _, err := part.Write(audio); err != nil {
 		return "", err
 	}
 	if err := w.Close(); err != nil {
@@ -51,6 +77,9 @@ func (c *Client) Transcribe(ctx context.Context, wav []byte, filename string) (s
 		return "", err
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("asr недоступен: %w", err)
