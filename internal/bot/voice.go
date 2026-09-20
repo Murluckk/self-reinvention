@@ -20,6 +20,7 @@ import (
 // базу, пока человек не нажал «Записать»: Whisper по-русски хорош, но на числах
 // ошибается, а мусор в данных дороже одного нажатия.
 type pending struct {
+	userID  int64
 	voice   *parse.Voice
 	raw     string
 	created time.Time
@@ -61,7 +62,7 @@ func (b *Bot) expirePending() {
 // handleVoice ведёт голосовое по пайплайну: скачать → сконвертировать → ASR →
 // разбор → подтверждение. На любом обрыве данные не теряются: сообщение
 // оседает заметкой с пометкой, что распознать не удалось.
-func (b *Bot) handleVoice(ctx context.Context, m *tg.Message, v *tg.Voice) {
+func (b *Bot) handleVoice(ctx context.Context, userID int64, m *tg.Message, v *tg.Voice) {
 	status, err := b.tg.SendMessage(ctx, m.Chat.ID, "🎧 Слушаю…", nil)
 	if err != nil {
 		b.log.Error("sendMessage", "err", err)
@@ -76,14 +77,15 @@ func (b *Bot) handleVoice(ctx context.Context, m *tg.Message, v *tg.Voice) {
 	text, err := b.transcribe(ctx, v)
 	if err != nil {
 		b.log.Error("распознавание", "err", err)
-		edit(b.saveUnrecognized(v, err), nil)
+		edit(b.saveUnrecognized(userID, v, err), nil)
 		return
 	}
 
 	date := b.cfg.Today()
 	res := parse.ParseVoiceRegex(text, date)
-	// LLM зовём только если дешёвый уровень почти ничего не понял.
-	if res.Recogn < 2 && b.llm != nil {
+	// Каждую расшифровку отдаём LLM; регулярки остаются быстрым фолбэком на
+	// случай недоступности API и дополняют пропущенные моделью поля.
+	if b.llm != nil {
 		lctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		llmRes, lerr := b.llm.Parse(lctx, text, date)
 		cancel()
@@ -111,11 +113,11 @@ func (b *Bot) handleVoice(ctx context.Context, m *tg.Message, v *tg.Voice) {
 	b.log.Info("голосовое разобрано", "level", res.Level, "fields", res.Count(), "chars", len(text))
 
 	parsed, _ := json.Marshal(voiceDump(res))
-	if err := b.st.SaveVoice(date, text, string(parsed), res.Level); err != nil {
+	if err := b.st.SaveVoice(userID, date, text, string(parsed), res.Level); err != nil {
 		b.log.Error("сохранение расшифровки", "err", err)
 	}
 
-	id := b.putPending(&pending{voice: res, raw: text, created: time.Now()})
+	id := b.putPending(&pending{userID: userID, voice: res, raw: text, created: time.Now()})
 	edit(confirmationText(res, false, ""), confirmKeyboard(id))
 }
 
@@ -165,14 +167,14 @@ func ext(path string) string {
 // saveUnrecognized — фолбэк: ни одно сообщение не должно пропасть из-за
 // упавшего сервиса. Сам файл остаётся на серверах Telegram, в заметке лежит
 // его id, так что расшифровать можно будет позже.
-func (b *Bot) saveUnrecognized(v *tg.Voice, cause error) string {
+func (b *Bot) saveUnrecognized(userID int64, v *tg.Voice, cause error) string {
 	n := &model.Note{
 		TS:   b.cfg.Now(),
 		Date: b.cfg.Today(),
 		Tag:  "нераспознано",
 		Text: fmt.Sprintf("голосовое %d сек, распознать не удалось (%v); file_id=%s", v.Duration, cause, v.FileID),
 	}
-	if err := b.st.AddNote(n); err != nil {
+	if err := b.st.AddNote(userID, n); err != nil {
 		b.log.Error("сохранение нераспознанного", "err", err)
 		return "⚠️ Распознать не удалось (" + cause.Error() + "), и заметку сохранить тоже не вышло: " + err.Error()
 	}
@@ -227,7 +229,7 @@ func voiceDump(v *parse.Voice) map[string]any {
 	return out
 }
 
-func (b *Bot) handleCallback(ctx context.Context, cb *tg.CallbackQuery) {
+func (b *Bot) handleCallback(ctx context.Context, userID int64, cb *tg.CallbackQuery) {
 	parts := strings.SplitN(cb.Data, ":", 3)
 	if len(parts) != 3 || parts[0] != "v" {
 		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "")
@@ -235,7 +237,7 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tg.CallbackQuery) {
 	}
 	action, id := parts[1], parts[2]
 	p := b.getPending(id)
-	if p == nil {
+	if p == nil || p.userID != userID {
 		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "Эта карточка уже неактуальна")
 		if cb.Message != nil {
 			_ = b.tg.EditMessageText(ctx, cb.Message.Chat.ID, cb.Message.MessageID,
@@ -243,7 +245,7 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tg.CallbackQuery) {
 		}
 		return
 	}
-	chatID, msgID := b.cfg.OwnerID, int64(0)
+	chatID, msgID := userID, int64(0)
 	if cb.Message != nil {
 		chatID, msgID = cb.Message.Chat.ID, cb.Message.MessageID
 	}
@@ -269,16 +271,16 @@ func (b *Bot) applyVoice(p *pending) string {
 	v := p.voice
 	var out []string
 	if v.Day != nil && !v.Day.Empty() {
-		if err := b.st.UpsertDay(v.Day); err != nil {
+		if err := b.st.UpsertDay(p.userID, v.Day); err != nil {
 			b.log.Error("запись дня из голосового", "err", err)
 			out = append(out, "⚠️ запись дня не сохранилась: "+err.Error())
 		} else {
-			out = append(out, b.dayConfirmation(v.Day.Date, v.Day))
+			out = append(out, b.dayConfirmation(p.userID, v.Day.Date, v.Day))
 		}
 	}
 	for _, m := range v.Money {
 		m.TS = b.cfg.Now()
-		if err := b.st.AddMoney(m); err != nil {
+		if err := b.st.AddMoney(p.userID, m); err != nil {
 			b.log.Error("запись денег из голосового", "err", err)
 			out = append(out, "⚠️ деньги не сохранились: "+err.Error())
 			continue
@@ -287,7 +289,7 @@ func (b *Bot) applyVoice(p *pending) string {
 	}
 	if note := strings.TrimSpace(v.Note); note != "" {
 		n := &model.Note{TS: b.cfg.Now(), Date: b.cfg.Today(), Text: note}
-		if err := b.st.AddNote(n); err != nil {
+		if err := b.st.AddNote(p.userID, n); err != nil {
 			b.log.Error("запись заметки из голосового", "err", err)
 			out = append(out, "⚠️ заметка не сохранилась: "+err.Error())
 		} else {

@@ -23,16 +23,24 @@ func TestDashboardRequiresPasswordAndRendersData(t *testing.T) {
 	defer st.Close()
 
 	cfg := &config.Config{
-		Location: time.UTC, DashboardUser: "owner", DashboardPassword: "secret",
+		Location: time.UTC,
+		Users: []config.User{
+			{TelegramID: 1001, DashboardUser: "owner", DashboardPassword: "secret"},
+			{TelegramID: 1002, DashboardUser: "friend", DashboardPassword: "other-secret"},
+		},
 		MinFullDaysOff30: 4, MaxStreakNoDayOff: 12, MaxEnglishSkipsWeek: 1,
 		MinSleepAvg: 7, MaxWakeSpreadH: 1.5, MinSavingsRate: .55,
 	}
 	sleep, english, focus, mood, energy := 7.5, 40, 8, 9, 7
 	clean := true
-	if err := st.UpsertDay(&model.Day{
+	if err := st.UpsertDay(1001, &model.Day{
 		Date: cfg.Today(), Sleep: &sleep, English: &english,
 		Focus: &focus, Mood: &mood, Energy: &energy, Clean: &clean,
 	}); err != nil {
+		t.Fatal(err)
+	}
+	otherSleep := 9.0
+	if err := st.UpsertDay(1002, &model.Day{Date: cfg.Today(), Sleep: &otherSleep}); err != nil {
 		t.Fatal(err)
 	}
 	dash := New(cfg, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -61,6 +69,17 @@ func TestDashboardRequiresPasswordAndRendersData(t *testing.T) {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("страница содержит удалённое поле %q", unwanted)
 		}
+	}
+	if strings.Contains(body, "9.0 ч") {
+		t.Fatal("в дашборд первого пользователя попали чужие данные")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/?days=7", nil)
+	req.SetBasicAuth("friend", "other-secret")
+	res = httptest.NewRecorder()
+	dash.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "9.0 ч") {
+		t.Fatalf("дашборд второго пользователя: %d %s", res.Code, res.Body.String())
 	}
 }
 

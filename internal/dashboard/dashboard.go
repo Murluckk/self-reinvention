@@ -78,16 +78,25 @@ func (d *Dashboard) Run(ctx context.Context) error {
 func (d *Dashboard) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, password, ok := r.BasicAuth()
-		userOK := subtle.ConstantTimeCompare([]byte(user), []byte(d.cfg.DashboardUser)) == 1
-		passwordOK := subtle.ConstantTimeCompare([]byte(password), []byte(d.cfg.DashboardPassword)) == 1
-		if !ok || !userOK || !passwordOK {
+		var userID int64
+		matched := false
+		for _, candidate := range d.cfg.Users {
+			userOK := subtle.ConstantTimeCompare([]byte(user), []byte(candidate.DashboardUser)) == 1
+			passwordOK := subtle.ConstantTimeCompare([]byte(password), []byte(candidate.DashboardPassword)) == 1
+			if userOK && passwordOK {
+				userID, matched = candidate.TelegramID, true
+			}
+		}
+		if !ok || !matched {
 			w.Header().Set("WWW-Authenticate", `Basic realm="Личный трекер", charset="UTF-8"`)
 			http.Error(w, "Нужен логин и пароль", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userIDKey{}, userID)))
 	})
 }
+
+type userIDKey struct{}
 
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +115,8 @@ func (d *Dashboard) index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	period := periodFrom(r)
-	page, err := d.page(period)
+	userID, _ := r.Context().Value(userIDKey{}).(int64)
+	page, err := d.page(userID, period)
 	if err != nil {
 		d.log.Error("сборка дашборда", "err", err)
 		http.Error(w, "Не смог собрать данные", http.StatusInternalServerError)
@@ -205,22 +215,22 @@ type streak struct {
 	Value string
 }
 
-func (d *Dashboard) page(period int) (*pageData, error) {
+func (d *Dashboard) page(userID int64, period int) (*pageData, error) {
 	to := d.cfg.Today()
 	from := report.AddDays(to, -(period - 1))
-	days, err := d.st.Days(from, to)
+	days, err := d.st.Days(userID, from, to)
 	if err != nil {
 		return nil, err
 	}
-	daysAll, err := d.st.Days(report.AddDays(to, -400), to)
+	daysAll, err := d.st.Days(userID, report.AddDays(to, -400), to)
 	if err != nil {
 		return nil, err
 	}
-	money, err := d.st.Money(from, to)
+	money, err := d.st.Money(userID, from, to)
 	if err != nil {
 		return nil, err
 	}
-	moneyAll, err := d.st.MoneyUntil(to)
+	moneyAll, err := d.st.MoneyUntil(userID, to)
 	if err != nil {
 		return nil, err
 	}

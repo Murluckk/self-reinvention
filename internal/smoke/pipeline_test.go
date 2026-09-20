@@ -17,6 +17,7 @@ import (
 )
 
 const today = "2026-08-24"
+const userID int64 = 949465743
 
 func testCfg() *config.Config {
 	return &config.Config{Location: time.UTC, MinFullDaysOff30: 4, MaxStreakNoDayOff: 12,
@@ -45,16 +46,16 @@ func TestPipelineFromCommandsToReport(t *testing.T) {
 		if len(res.Errors) > 0 {
 			t.Fatalf("%q -> %v", in, res.Errors)
 		}
-		if err := st.UpsertDay(res.Day); err != nil {
+		if err := st.UpsertDay(userID, res.Day); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// Дописывание задним числом не должно ломать уже записанное.
 	res := parse.ParseDay("2026-08-19 фокус 6", today)
-	if err := st.UpsertDay(res.Day); err != nil {
+	if err := st.UpsertDay(userID, res.Day); err != nil {
 		t.Fatal(err)
 	}
-	d, err := st.GetDay("2026-08-19")
+	d, err := st.GetDay(userID, "2026-08-19")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,19 +69,19 @@ func TestPipelineFromCommandsToReport(t *testing.T) {
 			t.Fatalf("%q -> %v", in, err)
 		}
 		m.TS = time.Now()
-		if err := st.AddMoney(m); err != nil {
+		if err := st.AddMoney(userID, m); err != nil {
 			t.Fatal(err)
 		}
 	}
 	tag, body := parse.ParseNote("#идея перенести тренировки на утро")
-	if err := st.AddNote(&model.Note{TS: time.Now(), Date: "2026-08-19", Tag: tag, Text: body}); err != nil {
+	if err := st.AddNote(userID, &model.Note{TS: time.Now(), Date: "2026-08-19", Tag: tag, Text: body}); err != nil {
 		t.Fatal(err)
 	}
 
-	days, _ := st.Days("2026-08-18", today)
-	money, _ := st.Money("2026-08-18", today)
-	moneyAll, _ := st.MoneyUntil(today)
-	notes, _ := st.Notes("2026-08-18", today)
+	days, _ := st.Days(userID, "2026-08-18", today)
+	money, _ := st.Money(userID, "2026-08-18", today)
+	moneyAll, _ := st.MoneyUntil(userID, today)
+	notes, _ := st.Notes(userID, "2026-08-18", today)
 	s := report.Build(report.Input{From: "2026-08-18", To: today, Days: days, DaysAll: days,
 		Money: money, MoneyAll: moneyAll, Notes: notes, Today: today, Cfg: testCfg()})
 

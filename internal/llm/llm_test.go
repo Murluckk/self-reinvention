@@ -128,6 +128,38 @@ func TestParseCallsOllamaCorrectly(t *testing.T) {
 	}
 }
 
+func TestParseCallsOpenAICompatibleAPI(t *testing.T) {
+	var gotPath, gotAuth string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"{\"day\":{\"mood\":8}}"}}]}`)
+	}))
+	defer srv.Close()
+
+	v, err := NewOpenAI(srv.URL, "sk-test", "gpt-test").Parse(
+		context.Background(), "настроение восемь", "2026-08-24",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/chat/completions" || gotAuth != "Bearer sk-test" {
+		t.Fatalf("path=%q auth=%q", gotPath, gotAuth)
+	}
+	if gotBody["model"] != "gpt-test" {
+		t.Fatalf("тело запроса: %v", gotBody)
+	}
+	messages, ok := gotBody["messages"].([]any)
+	if !ok || len(messages) != 2 {
+		t.Fatalf("messages: %v", gotBody["messages"])
+	}
+	if v.Day.Mood == nil || *v.Day.Mood != 8 {
+		t.Fatalf("настроение: %v", v.Day.Mood)
+	}
+}
+
 // Ollama не поднята — ошибка должна быть внятной, на неё завязан фолбэк.
 func TestParseServiceDown(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
