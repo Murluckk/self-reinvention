@@ -29,9 +29,7 @@ func Markdown(s *Stats) string {
 		p("- подъём: нет данных")
 	}
 	if s.Bed.N() > 0 {
-		mn, _ := s.Bed.Min()
-		mx, _ := s.Bed.Max()
-		p("- засыпание: с %s до %s, разброс **%.1f ч**", hhmm(mn), hhmm(mx), s.Bed.Spread())
+		p("- последнее засыпание: **%s** (за %s)", hhmm(s.Bed.Values[s.Bed.N()-1]), days(s.Bed.N()))
 	} else {
 		p("- засыпание: нет данных")
 	}

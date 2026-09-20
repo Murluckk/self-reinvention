@@ -243,39 +243,6 @@ func (s *Store) migrateUsers(legacyOwnerID int64) error {
 	return nil
 }
 
-// migrateRatingsToTen один раз переводит исторические оценки 1..5 в 2..10.
-// Маркер нужен обязательно: без него каждый рестарт повторно умножал бы данные.
-func (s *Store) migrateRatingsToTen() error {
-	const name = "ratings_1_to_10"
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	var applied int
-	if err := tx.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE name=?", name).Scan(&applied); err != nil {
-		return err
-	}
-	if applied > 0 {
-		return tx.Commit()
-	}
-	if _, err := tx.Exec(`
-		UPDATE days SET
-			focus = CASE WHEN focus BETWEEN 1 AND 5 THEN focus * 2 ELSE focus END,
-			mood = CASE WHEN mood BETWEEN 1 AND 5 THEN mood * 2 ELSE mood END,
-			energy = CASE WHEN energy BETWEEN 1 AND 5 THEN energy * 2 ELSE energy END`); err != nil {
-		return fmt.Errorf("миграция оценок на шкалу 1-10: %w", err)
-	}
-	if _, err := tx.Exec(
-		"INSERT INTO schema_migrations (name, applied_at) VALUES (?,?)",
-		name, time.Now().UTC().Format(time.RFC3339),
-	); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 func (s *Store) columns(table string) (map[string]bool, error) {
 	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {

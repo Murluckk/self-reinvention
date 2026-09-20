@@ -66,19 +66,25 @@ func main() {
 				Name: "weekly_report:" + jobID, At: cfg.WeeklyReport, Weekday: &sunday,
 				Run: func(ctx context.Context) error { return b.SendWeekly(ctx, userID) },
 			},
-			scheduler.Job{
-				Name: "salary_reminder:" + jobID, At: cfg.IncomeReminder, DayOfMonth: 5,
-				Run: func(ctx context.Context) error { return b.RemindIncome(ctx, userID, "зарплата") },
-			},
-			scheduler.Job{
-				Name: "advance_reminder:" + jobID, At: cfg.IncomeReminder, DayOfMonth: 20,
-				Run: func(ctx context.Context) error { return b.RemindIncome(ctx, userID, "аванс") },
-			},
-			scheduler.Job{
-				Name: "monthly_finance:" + jobID, At: cfg.MonthlyFinance, DayOfMonth: 1,
-				Run: func(ctx context.Context) error { return b.SendMonthlyFinance(ctx, userID) },
-			},
 		)
+		// Аванс, зарплата и ежемесячный финансовый анализ в текущем профиле
+		// относятся только к первому пользователю (OWNER_ID, Паша).
+		if userID == cfg.OwnerID {
+			jobs = append(jobs,
+				scheduler.Job{
+					Name: "salary_reminder:" + jobID, At: cfg.IncomeReminder, DayOfMonth: 5,
+					Run: func(ctx context.Context) error { return b.RemindIncome(ctx, userID, "зарплата") },
+				},
+				scheduler.Job{
+					Name: "advance_reminder:" + jobID, At: cfg.IncomeReminder, DayOfMonth: 20,
+					Run: func(ctx context.Context) error { return b.RemindIncome(ctx, userID, "аванс") },
+				},
+				scheduler.Job{
+					Name: "monthly_finance:" + jobID, At: cfg.MonthlyFinance, DayOfMonth: 1,
+					Run: func(ctx context.Context) error { return b.SendMonthlyFinance(ctx, userID) },
+				},
+			)
+		}
 	}
 	jobs = append(jobs, scheduler.Job{Name: "daily_backup", At: cfg.DailyBackup, Run: b.SendBackup})
 	sch := scheduler.New(cfg, st, log, jobs...)
