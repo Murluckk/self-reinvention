@@ -276,6 +276,22 @@ func Merge(dst, src *Day) {
 	}
 }
 
+// MergeMissing дополняет dst только отсутствующими в нём полями src.
+// Используется для низкоприоритетных парсеров: их догадки не должны затирать
+// значения, которые уже вернул основной парсер.
+func MergeMissing(dst, src *Day) {
+	dv := reflect.ValueOf(dst).Elem()
+	sv := reflect.ValueOf(src).Elem()
+	for i := range fields {
+		f := &fields[i]
+		d, s := dv.Field(f.Index), sv.Field(f.Index)
+		if !d.IsNil() || s.IsNil() {
+			continue
+		}
+		d.Set(s)
+	}
+}
+
 // SetFields возвращает поля, заполненные в записи.
 func (d *Day) SetFields() []Field {
 	return d.SetFieldsFor("")

@@ -99,7 +99,7 @@ func (b *Bot) handleVoice(ctx context.Context, userID int64, m *tg.Message, v *t
 			}
 		case llmRes.Count() >= res.Count():
 			// regex мог зацепить то, что модель пропустила, — оставляем оба слоя
-			model.Merge(llmRes.Day, res.Day)
+			model.MergeMissing(llmRes.Day, res.Day)
 			llmRes.Money = append(llmRes.Money, res.Money...)
 			llmRes.Level = "llm"
 			if res.Recogn > 0 {
