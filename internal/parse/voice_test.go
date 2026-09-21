@@ -22,6 +22,25 @@ func TestVoiceRegexNegations(t *testing.T) {
 	mustBool(t, v.Day.Workout, false)
 }
 
+func TestVoiceRegexWorkoutNumericBoolean(t *testing.T) {
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{"тренировка 0", false},
+		{"тренировка: ноль", false},
+		{"тренировка нет", false},
+		{"тренировка 0, ну то есть ее не было", false},
+		{"тренировка 1", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.text, func(t *testing.T) {
+			v := ParseVoiceRegex(tt.text, today)
+			mustBool(t, v.Day.Workout, tt.want)
+		})
+	}
+}
+
 func TestVoiceRegexMoney(t *testing.T) {
 	v := ParseVoiceRegex("потратил 1200 на еду и отложил 50000", today)
 	if len(v.Money) != 2 {
