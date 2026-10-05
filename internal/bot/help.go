@@ -4,59 +4,47 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/murluckk/self-reinvention/internal/config"
 	"github.com/murluckk/self-reinvention/internal/model"
 )
 
-var helpText = buildHelp(config.ProfilePasha)
-
-func helpTextFor(profile string) string {
-	return buildHelp(profile)
-}
-
-// buildHelp собирает шпаргалку из того же реестра полей, что и парсер: список
-// ключей в /help не может отстать от того, что бот реально понимает.
-func buildHelp(profile string) string {
+// helpText собирает шпаргалку из того же реестра полей, что и парсер: список
+// ключей в /help не может отстать от того, что бот реально понимает, и
+// показывает только показатели этого пользователя.
+func helpText(u *model.User, admin bool) string {
 	var b strings.Builder
 	b.WriteString(`Шпаргалка
 
+Вечером сам спрошу кнопками, как прошёл день. Начать раньше — /c, за вчера — /c вчера.
+Голосовое — распознаю, покажу разбор, запишу после подтверждения; любое поле можно поправить кнопкой «Исправить».
 Просто текст — заметка с таймстемпом. С «#тег» в начале — с тегом.
-Голосовое — распознаю, покажу разбор, запишу после подтверждения.
 
 /d [YYYY-MM-DD] ключ значение ...
-`)
-	if profile == config.ProfileSveta {
-		b.WriteString(`  /d подъем 8:00 отбой 23:30 трен прогулка учеба состояние 8
-  /d сладкое нет алкоголь нет полезное книга по психологии
-`)
-	} else {
-		b.WriteString(`  /d подъем 7:30 отбой 23:40 алго 60 системы 30 трен состояние 8
-  /d 2026-08-20 алго нет системы 45 трен нет состояние 6
-`)
-	}
-	b.WriteString(`  Разделитель — пробел, «=» или «:». Тренировку можно писать флагом: «трен».
-  Также понимаю «зал», «бег», «улица» и «отдых».
-  Дата первым аргументом — дописать задним числом (upsert по дате).
+  /d ` + exampleFor(u.Fields.Fields()) + `
+  Разделитель — пробел, «=» или «:». Да/нет можно писать флагом: «трен».
+  Дата первым аргументом — дописать задним числом.
 
 Ключи:
 `)
-	for _, f := range model.FieldsFor(profile) {
-		alias := strings.Join(f.Keys, ", ")
-		kind := map[model.Kind]string{
-			model.KindFloat:    "число",
-			model.KindInt:      "целое",
-			model.KindDuration: "мин/нет",
-			model.KindScale:    "1-10",
-			model.KindBool:     "да/нет",
-			model.KindString:   "текст",
-			model.KindTime:     "ЧЧ:ММ",
-		}[f.Kind]
-		fmt.Fprintf(&b, "  %-28s %-7s %s\n", alias, kind, f.Desc)
+	kinds := map[model.Kind]string{
+		model.KindFloat:    "число",
+		model.KindInt:      "целое",
+		model.KindDuration: "мин/нет",
+		model.KindScale:    "1-10",
+		model.KindBool:     "да/нет",
+		model.KindString:   "текст",
+		model.KindTime:     "ЧЧ:ММ",
+	}
+	fields := u.Fields.Fields()
+	if note, ok := model.FieldByColumn("note"); ok {
+		fields = append(fields, *note)
+	}
+	for _, f := range fields {
+		fmt.Fprintf(&b, "  %-28s %-7s %s\n", strings.Join(f.Keys, ", "), kinds[f.Kind], f.Desc)
 	}
 	b.WriteString(`
 Да/нет понимаю как 1/0, да/нет, +/-, y/n, true/false.
 `)
-	if profile == config.ProfilePasha {
+	if u.Finance {
 		b.WriteString(`
 /m — деньги
   /m +250000 зп            доход
@@ -65,26 +53,76 @@ func buildHelp(profile string) string {
   /m =5000$ холодный кошелёк  валюта суффиксом: ₽ $ € usdt btc
 `)
 	}
-	if profile == config.ProfilePasha {
-		b.WriteString(`
-/s        статус: сегодня, неделя, капитал, стрики
-`)
-	} else {
-		b.WriteString(`
-/s        статус: сегодня, неделя, состояние, стрики
-`)
-	}
 	b.WriteString(`
+/s        статус: сегодня, неделя, стрики
 /w [n]    выгрузка за n дней (по умолчанию 7) markdown-файлом
-/undo     удалить последнюю заметку
-/help     эта шпаргалка
+/i        наблюдения: что связано с твоим состоянием
+/review   AI-разбор последней недели
+/undo     удалить последнюю заметку` + map[bool]string{true: " или трату", false: ""}[u.Finance] + `
 
-В 22:00 по твоему часовому поясу напомню внести итоги дня.
-В воскресенье пришлю разбор недели.`)
-	if profile == config.ProfilePasha {
+Настройки
+/fields   что отслеживать
+/tz       часовой пояс (сейчас ` + u.Timezone + `)
+/password новый пароль от дашборда
+/share    делиться сериями с друзьями, /friends — их серии
+
+В воскресенье пришлю выгрузку недели и AI-разбор.`)
+	if u.Finance {
 		b.WriteString(`
 5-го напомню записать зарплату, 20-го — аванс. 1-го числа придёт финансовый
 итог и AI-анализ предыдущего месяца.`)
 	}
+	if admin {
+		b.WriteString(`
+
+Админ
+/invite [профиль]  ссылка-приглашение (профили: ` + presetNames() + `)
+/users             участники
+/remove <id>       закрыть доступ
+/health            состояние бота и последние сбои`)
+	}
 	return b.String()
+}
+
+func presetNames() string {
+	names := make([]string, 0, len(model.Presets))
+	for _, p := range model.Presets {
+		names = append(names, p.Name)
+	}
+	return strings.Join(names, ", ")
+}
+
+// exampleFor строит пример /d из полей пользователя. Поля, забирающие остаток
+// строки, идут последними — иначе они съедят всё, что после них.
+func exampleFor(fields []model.Field) string {
+	var parts, rest []string
+	for _, f := range fields {
+		key := f.Keys[0]
+		switch f.Kind {
+		case model.KindBool:
+			if f.Bad {
+				parts = append(parts, key+" нет")
+			} else {
+				parts = append(parts, key)
+			}
+		case model.KindTime:
+			v := "7:30"
+			if f.DB == "bed" {
+				v = "23:40"
+			}
+			parts = append(parts, key+" "+v)
+		case model.KindDuration:
+			parts = append(parts, key+" 45")
+		case model.KindScale:
+			parts = append(parts, key+" 8")
+		case model.KindInt, model.KindFloat:
+			parts = append(parts, key+" 5")
+		case model.KindString:
+			rest = append(rest, key+" книга по психологии")
+		}
+	}
+	if len(rest) > 0 {
+		parts = append(parts, rest[0])
+	}
+	return strings.Join(parts, " ")
 }

@@ -12,7 +12,7 @@ func TestParseUsers(t *testing.T) {
 	}
 	if len(users) != 2 || users[0].TelegramID != 949465743 ||
 		users[0].Name != "Паша" || users[1].Name != "Света" ||
-		users[0].Profile != ProfilePasha || users[1].Profile != ProfileSveta ||
+		users[0].Profile != "pasha" || users[1].Profile != "sveta" ||
 		users[1].DashboardUser != "friend" || users[1].DashboardPassword != "pass-two" {
 		t.Fatalf("users: %+v", users)
 	}
@@ -32,7 +32,9 @@ func TestParseUsersRejectsDuplicates(t *testing.T) {
 	}
 }
 
-func TestLoadAssignsProfileTimezones(t *testing.T) {
+func TestLoadAssignsLegacyProfileTimezones(t *testing.T) {
+	t.Setenv("PASHA_TZ", "Asia/Vladivostok")
+	t.Setenv("SVETA_TZ", "Asia/Irkutsk")
 	t.Setenv("BOT_TOKEN", "test-token")
 	t.Setenv("OWNER_ID", "949465743")
 	t.Setenv("TZ", "UTC")
@@ -42,12 +44,21 @@ func TestLoadAssignsProfileTimezones(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pasha, _ := cfg.User(949465743)
-	sveta, _ := cfg.User(908821693)
+	pasha, sveta := cfg.Users[0], cfg.Users[1]
 	if pasha.Timezone != "Asia/Vladivostok" || sveta.Timezone != "Asia/Irkutsk" {
 		t.Fatalf("Паша=%q Света=%q", pasha.Timezone, sveta.Timezone)
 	}
 	if cfg.DailyReminder != "22:00" {
 		t.Fatalf("время напоминания %q", cfg.DailyReminder)
+	}
+}
+
+func TestParseUsersAllowsEmptyPasswordAndNewPresets(t *testing.T) {
+	users, err := parseUsers("1:Тимур:basic:timur:", User{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if users[0].Profile != "basic" || users[0].DashboardPassword != "" {
+		t.Fatalf("users: %+v", users)
 	}
 }

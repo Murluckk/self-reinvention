@@ -3,6 +3,11 @@ Description=Telegram tracking bot
 Documentation=https://github.com/murluckk/self-reinvention
 After=network-online.target
 Wants=network-online.target
+# Если бот падает пять раз за пять минут, systemd сдаётся — и тогда
+# tracker-alert.service пишет владельцу в Telegram.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+OnFailure=tracker-alert.service
 
 [Service]
 Type=simple

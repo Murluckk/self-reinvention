@@ -5,6 +5,7 @@ package bot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -13,9 +14,11 @@ import (
 	"github.com/murluckk/self-reinvention/internal/asr"
 	"github.com/murluckk/self-reinvention/internal/config"
 	"github.com/murluckk/self-reinvention/internal/llm"
+	"github.com/murluckk/self-reinvention/internal/model"
 	"github.com/murluckk/self-reinvention/internal/report"
 	"github.com/murluckk/self-reinvention/internal/store"
 	"github.com/murluckk/self-reinvention/internal/tg"
+	"github.com/murluckk/self-reinvention/internal/users"
 )
 
 // Bot — главный объект приложения.
@@ -23,21 +26,35 @@ type Bot struct {
 	cfg         *config.Config
 	tg          *tg.Client
 	st          *store.Store
+	users       *users.Registry
 	asr         *asr.Client
 	asrFallback *asr.Client
 	llm         *llm.Client
 	log         *slog.Logger
 
-	mu      sync.Mutex
-	pending map[string]*pending
-	seq     int64
+	// Version — версия сборки для /health.
+	Version  string
+	started  time.Time
+	username string
+
+	mu       sync.Mutex
+	pending  map[string]*pending
+	seq      int64
+	checkins map[int64]*checkin
+	edits    map[int64]*fieldEdit
+
+	health *health
 }
 
 // New собирает бота из готовых зависимостей.
-func New(cfg *config.Config, client *tg.Client, st *store.Store, a, fallback *asr.Client, l *llm.Client, log *slog.Logger) *Bot {
+func New(cfg *config.Config, client *tg.Client, st *store.Store, reg *users.Registry, a, fallback *asr.Client, l *llm.Client, log *slog.Logger) *Bot {
 	return &Bot{
-		cfg: cfg, tg: client, st: st, asr: a, asrFallback: fallback,
-		llm: l, log: log, pending: map[string]*pending{},
+		cfg: cfg, tg: client, st: st, users: reg, asr: a, asrFallback: fallback,
+		llm: l, log: log, started: time.Now(),
+		pending:  map[string]*pending{},
+		checkins: map[int64]*checkin{},
+		edits:    map[int64]*fieldEdit{},
+		health:   newHealth(),
 	}
 }
 
@@ -48,13 +65,15 @@ func (b *Bot) Run(ctx context.Context) error {
 		// сам переживает разрывы. Но в логе видно, что токен не сработал.
 		b.log.Error("не смог представиться в telegram, проверь BOT_TOKEN", "err", err)
 	} else {
+		b.username = me.Username
 		b.log.Info("подключился", "bot", me.Username)
 	}
-	if err := b.tg.SetMyCommands(ctx, commandDescriptions); err != nil {
+	if err := b.tg.SetMyCommands(ctx, commandMenu); err != nil {
 		b.log.Warn("не удалось выставить меню команд", "err", err)
 	}
 	var offset int64
 	backoff := time.Second
+	var failingSince time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -67,6 +86,9 @@ func (b *Bot) Run(ctx context.Context) error {
 				return nil
 			}
 			b.log.Error("getUpdates", "err", err)
+			if failingSince.IsZero() {
+				failingSince = time.Now()
+			}
 			select {
 			case <-ctx.Done():
 				return nil
@@ -77,6 +99,13 @@ func (b *Bot) Run(ctx context.Context) error {
 			}
 			continue
 		}
+		if !failingSince.IsZero() && time.Since(failingSince) > 5*time.Minute {
+			// Пока Telegram недоступен, писать в него бессмысленно; сообщаем,
+			// когда связь вернулась, чтобы было видно, сколько бот был глухим.
+			b.alert(ctx, "telegram", fmt.Sprintf("Telegram был недоступен %s, связь восстановилась.",
+				time.Since(failingSince).Round(time.Minute)))
+		}
+		failingSince = time.Time{}
 		backoff = time.Second
 		for _, u := range updates {
 			if u.UpdateID >= offset {
@@ -84,7 +113,7 @@ func (b *Bot) Run(ctx context.Context) error {
 			}
 			b.handleUpdate(ctx, &u)
 		}
-		b.expirePending()
+		b.expireSessions()
 	}
 }
 
@@ -92,82 +121,103 @@ func (b *Bot) handleUpdate(ctx context.Context, u *tg.Update) {
 	defer func() {
 		if r := recover(); r != nil {
 			b.log.Error("паника в обработчике", "panic", r)
+			b.alert(ctx, "panic", fmt.Sprintf("Паника в обработчике: %v", r))
 		}
 	}()
 	switch {
 	case u.CallbackQuery != nil:
-		if !b.owns(u.CallbackQuery.From) {
+		user, ok := b.member(u.CallbackQuery.From)
+		if !ok {
 			return
 		}
-		b.handleCallback(ctx, u.CallbackQuery.From.ID, u.CallbackQuery)
+		b.handleCallback(ctx, user, u.CallbackQuery)
 	case u.Message != nil:
-		if !b.owns(u.Message.From) {
+		if b.tryJoin(ctx, u.Message) {
 			return
 		}
-		b.handleMessage(ctx, u.Message.From.ID, u.Message)
+		user, ok := b.member(u.Message.From)
+		if !ok {
+			return
+		}
+		b.handleMessage(ctx, user, u.Message)
 	}
 }
 
-// owns молча отсекает всех, кроме владельца: бот личный, отвечать посторонним
-// он не должен даже отказом.
-func (b *Bot) owns(u *tg.User) bool {
+// member молча отсекает всех, кого нет в реестре: бот личный, отвечать
+// посторонним он не должен даже отказом. Войти можно только по приглашению.
+func (b *Bot) member(u *tg.User) (*model.User, bool) {
 	if u == nil {
-		return false
+		return nil, false
 	}
-	if _, ok := b.cfg.User(u.ID); !ok {
+	user, ok := b.users.Get(u.ID)
+	if !ok {
 		b.log.Info("игнорирую чужое сообщение", "user_id", u.ID)
-		return false
+		return nil, false
 	}
-	return true
+	return user, true
 }
+
+func (b *Bot) isAdmin(user *model.User) bool { return user.ID == b.cfg.OwnerID }
 
 // reply отправляет текст, логируя ошибку отправки: терять данные из-за
 // упавшего ответа нельзя, но и падать бот не должен.
 func (b *Bot) reply(ctx context.Context, chatID int64, text string) {
+	b.send(ctx, chatID, text, nil)
+}
+
+func (b *Bot) send(ctx context.Context, chatID int64, text string, markup *tg.InlineKeyboardMarkup) *tg.Message {
 	if strings.TrimSpace(text) == "" {
-		return
+		return nil
 	}
-	if _, err := b.tg.SendMessage(ctx, chatID, text, nil); err != nil {
+	var opt *tg.SendOptions
+	if markup != nil {
+		opt = &tg.SendOptions{Markup: markup}
+	}
+	m, err := b.tg.SendMessage(ctx, chatID, text, opt)
+	if err != nil {
 		b.log.Error("sendMessage", "err", err)
+		return nil
+	}
+	return m
+}
+
+func (b *Bot) edit(ctx context.Context, chatID, msgID int64, text string, markup *tg.InlineKeyboardMarkup) {
+	if err := b.tg.EditMessageText(ctx, chatID, msgID, text, markup); err != nil &&
+		!strings.Contains(err.Error(), "message is not modified") {
+		b.log.Error("editMessageText", "err", err)
 	}
 }
 
-// Notify пишет владельцу — этим пользуется планировщик.
+// Notify пишет пользователю — этим пользуется планировщик.
 func (b *Bot) Notify(ctx context.Context, userID int64, text string) error {
 	_, err := b.tg.SendMessage(ctx, userID, text, nil)
 	return err
 }
 
-func (b *Bot) profile(userID int64) string {
-	if user, ok := b.cfg.User(userID); ok {
-		return user.Profile
-	}
-	return config.ProfilePasha
-}
-
-func (b *Bot) now(userID int64) time.Time { return b.cfg.NowFor(userID) }
-func (b *Bot) today(userID int64) string  { return b.cfg.TodayFor(userID) }
+// user перечитывает пользователя из реестра: настройки могли поменяться,
+// пока шёл длинный запрос к ASR или LLM.
+func (b *Bot) user(id int64) (*model.User, bool) { return b.users.Get(id) }
 
 // stats собирает агрегаты за период; общий код для /s, /w и планировщика.
-func (b *Bot) stats(userID int64, from, to string) (*report.Stats, error) {
-	days, err := b.st.Days(userID, from, to)
+func (b *Bot) stats(user *model.User, from, to string) (*report.Stats, error) {
+	days, err := b.st.Days(user.ID, from, to)
 	if err != nil {
 		return nil, err
 	}
 	// Стрики считаем по длинному окну, иначе серия в 40 дней покажется семёркой.
-	daysAll, err := b.st.Days(userID, report.AddDays(to, -400), to)
+	daysAll, err := b.st.Days(user.ID, report.AddDays(to, -400), to)
 	if err != nil {
 		return nil, err
 	}
-	money, err := b.st.Money(userID, from, to)
+	money, err := b.st.Money(user.ID, from, to)
 	if err != nil {
 		return nil, err
 	}
-	moneyAll, err := b.st.MoneyUntil(userID, to)
+	moneyAll, err := b.st.MoneyUntil(user.ID, to)
 	if err != nil {
 		return nil, err
 	}
-	notes, err := b.st.Notes(userID, from, to)
+	notes, err := b.st.Notes(user.ID, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -176,8 +226,29 @@ func (b *Bot) stats(userID int64, from, to string) (*report.Stats, error) {
 		Days: days, DaysAll: daysAll,
 		Money: money, MoneyAll: moneyAll,
 		Notes:   notes,
-		Today:   b.today(userID),
+		Today:   user.Today(),
 		Cfg:     b.cfg,
-		Profile: b.profile(userID),
+		Fields:  user.Fields,
+		Finance: user.Finance,
 	}), nil
+}
+
+func (b *Bot) expireSessions() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for id, p := range b.pending {
+		if time.Since(p.created) > pendingTTL {
+			delete(b.pending, id)
+		}
+	}
+	for id, c := range b.checkins {
+		if time.Since(c.touched) > checkinTTL {
+			delete(b.checkins, id)
+		}
+	}
+	for id, e := range b.edits {
+		if time.Since(e.created) > pendingTTL {
+			delete(b.edits, id)
+		}
+	}
 }

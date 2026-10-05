@@ -225,3 +225,44 @@ func TestMoneyAndNotesByPeriod(t *testing.T) {
 		t.Fatalf("заметки: %+v (%v)", n, err)
 	}
 }
+
+func TestInviteIsSingleUseAndExpires(t *testing.T) {
+	st := open(t)
+	if err := st.CreateInvite("tok", "basic", 1, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if preset, ok, err := st.UseInvite("tok", 42); err != nil || !ok || preset != "basic" {
+		t.Fatalf("первое использование: %q %v %v", preset, ok, err)
+	}
+	if _, ok, _ := st.UseInvite("tok", 43); ok {
+		t.Fatal("приглашение сработало второй раз")
+	}
+	if err := st.CreateInvite("old", "basic", 1, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := st.UseInvite("old", 44); ok {
+		t.Fatal("сработало просроченное приглашение")
+	}
+}
+
+func TestVerifyBackupCountsRows(t *testing.T) {
+	st := open(t)
+	mood := 7
+	if err := st.UpsertDay(1, &model.Day{Date: "2026-10-05", Mood: &mood}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "copy.db")
+	if err := st.Backup(path); err != nil {
+		t.Fatal(err)
+	}
+	c, err := VerifyBackup(path)
+	if err != nil || c.Days != 1 {
+		t.Fatalf("проверка бэкапа: %+v %v", c, err)
+	}
+	if err := os.WriteFile(path, []byte("not a database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyBackup(path); err == nil {
+		t.Fatal("битый бэкап прошёл проверку")
+	}
+}

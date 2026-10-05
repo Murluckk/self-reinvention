@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/murluckk/self-reinvention/internal/auth"
 	"github.com/murluckk/self-reinvention/internal/config"
 	"github.com/murluckk/self-reinvention/internal/model"
 	"github.com/murluckk/self-reinvention/internal/store"
+	"github.com/murluckk/self-reinvention/internal/users"
 )
 
 func TestDashboardRequiresPasswordAndRendersData(t *testing.T) {
@@ -22,14 +24,11 @@ func TestDashboardRequiresPasswordAndRendersData(t *testing.T) {
 	}
 	defer st.Close()
 
-	cfg := &config.Config{
-		Location: time.UTC,
-		Users: []config.User{
-			{TelegramID: 1001, Name: "Паша", Profile: config.ProfilePasha, DashboardUser: "owner", DashboardPassword: "secret"},
-			{TelegramID: 1002, Name: "Света", Profile: config.ProfileSveta, DashboardUser: "friend", DashboardPassword: "other-secret"},
-		},
-		MaxWakeSpreadH: 1.5, MinSavingsRate: .55,
-	}
+	cfg := &config.Config{Location: time.UTC, MaxWakeSpreadH: 1.5, MinSavingsRate: .55}
+	reg := registry(t, st,
+		users.Seed{ID: 1001, Name: "Паша", Preset: "pasha", Timezone: "UTC", Login: "owner", Password: "secret"},
+		users.Seed{ID: 1002, Name: "Света", Preset: "sveta", Timezone: "UTC", Login: "friend", Password: "other-secret"},
+	)
 	wake, algorithms, systems, mood := "07:30", 40, 45, 9
 	workout := true
 	if err := st.UpsertDay(1001, &model.Day{
@@ -52,7 +51,7 @@ func TestDashboardRequiresPasswordAndRendersData(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	dash := New(cfg, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	dash := New(cfg, st, reg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	req := httptest.NewRequest(http.MethodGet, "/?days=7", nil)
 	res := httptest.NewRecorder()
@@ -89,7 +88,7 @@ func TestDashboardRequiresPasswordAndRendersData(t *testing.T) {
 	dash.Handler().ServeHTTP(res, req)
 	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "Света") ||
 		!strings.Contains(res.Body.String(), "09:00") ||
-		!strings.Contains(res.Body.String(), "Прогулки") ||
+		!strings.Contains(res.Body.String(), "Прогулка") ||
 		!strings.Contains(res.Body.String(), "Сладкое") ||
 		!strings.Contains(res.Body.String(), "Алкоголь") ||
 		!strings.Contains(res.Body.String(), "книга по психологии") {
@@ -111,12 +110,82 @@ func TestDashboardRequiresPasswordAndRendersData(t *testing.T) {
 }
 
 func TestHealthDoesNotRequirePassword(t *testing.T) {
-	cfg := &config.Config{DashboardUser: "owner", DashboardPassword: "secret"}
-	dash := New(cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	dash := New(&config.Config{}, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	res := httptest.NewRecorder()
 	dash.Handler().ServeHTTP(res, req)
 	if res.Code != http.StatusOK || res.Body.String() != "ok\n" {
 		t.Fatalf("health: %d %q", res.Code, res.Body.String())
+	}
+}
+
+func registry(t *testing.T, st *store.Store, seeds ...users.Seed) *users.Registry {
+	t.Helper()
+	reg, err := users.Load(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Import(seeds, seeds[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	return reg
+}
+
+func TestDashboardBlocksPasswordGuessing(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "tracker.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	reg := registry(t, st, users.Seed{ID: 1, Name: "Паша", Preset: "pasha", Timezone: "UTC", Login: "owner", Password: "secret"})
+	dash := New(&config.Config{Location: time.UTC}, st, reg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	var blocked []string
+	dash.OnBlocked = func(key string) { blocked = append(blocked, key) }
+	h := dash.Handler()
+	try := func(ip, password string) int {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Forwarded-For", ip)
+		req.SetBasicAuth("owner", password)
+		res := httptest.NewRecorder()
+		h.ServeHTTP(res, req)
+		return res.Code
+	}
+	for i := 0; i < 10; i++ {
+		if code := try("203.0.113.7", "wrong"); code != http.StatusUnauthorized {
+			t.Fatalf("попытка %d: статус %d", i, code)
+		}
+	}
+	if code := try("203.0.113.7", "secret"); code != http.StatusTooManyRequests {
+		t.Fatalf("после 10 ошибок IP должен быть заблокирован даже с верным паролем, статус %d", code)
+	}
+	if len(blocked) == 0 || !strings.Contains(blocked[0], "203.0.113.7") {
+		t.Fatalf("владельца не предупредили о переборе: %v", blocked)
+	}
+	if code := try("198.51.100.1", "secret"); code != http.StatusOK {
+		t.Fatalf("другой IP с верным паролем: статус %d", code)
+	}
+}
+
+func TestDashboardAcceptsNewPasswordImmediately(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "tracker.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	reg := registry(t, st, users.Seed{ID: 1, Name: "Паша", Preset: "pasha", Timezone: "UTC", Login: "owner", Password: "old"})
+	dash := New(&config.Config{Location: time.UTC}, st, reg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if _, ok := dash.check("owner", "old"); !ok {
+		t.Fatal("старый пароль не принят")
+	}
+	u, _ := reg.Get(1)
+	u.PasswordHash, _ = auth.Hash("new")
+	if err := reg.Save(u); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := dash.check("owner", "old"); ok {
+		t.Fatal("после смены пароля старый всё ещё работает из кэша")
+	}
+	if _, ok := dash.check("owner", "new"); !ok {
+		t.Fatal("новый пароль не принят")
 	}
 }

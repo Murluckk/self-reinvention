@@ -3,7 +3,6 @@ package report
 import (
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/murluckk/self-reinvention/internal/config"
 	"github.com/murluckk/self-reinvention/internal/model"
@@ -121,135 +120,112 @@ func (c *CurrencyStats) SavingsRate() (float64, bool) {
 	return c.Saved / c.Income, true
 }
 
+// FieldStat — агрегат по одному показателю за период.
+type FieldStat struct {
+	Field  model.Field
+	Series Series // числовые значения: минуты, оценки, часы суток
+	Yes    int    // дней «да»: занимался, отметил, заполнил
+	Known  int    // дней, когда показатель вообще отмечен
+}
+
 // Stats — всё, что бот знает о периоде.
 type Stats struct {
 	From, To   string
-	Profile    string
+	Fields     model.FieldSet
+	Finance    bool
 	TotalDays  int
 	FilledDays int
 
-	Wake         Series // часы с дробной частью
-	Bed          Series
-	Algorithms   Series // минуты
-	SystemDesign Series // минуты
-	Mood         Series
-
-	Workouts         int
-	AlgorithmDays    int
-	SystemDesignDays int
-	Walks            int
-	StudyDays        int
-	UsefulDays       int
-	SweetDays        int
-	SweetKnown       int
-	AlcoholDays      int
-	AlcoholKnown     int
+	Order   []model.Field // показатели пользователя в порядке каталога
+	ByField map[string]*FieldStat
 
 	Currencies map[string]*CurrencyStats
 	CurOrder   []string
 
-	Streaks Streaks
-	Days    []*model.Day
-	Notes   []*model.Note
-	Flags   []string
+	Streaks  Streaks
+	Days     []*model.Day
+	Notes    []*model.Note
+	Flags    []string
+	Insights []Insight
 }
+
+// Field возвращает агрегат по колонке; для чужой колонки — пустой.
+func (s *Stats) Field(col string) *FieldStat {
+	if fs, ok := s.ByField[col]; ok {
+		return fs
+	}
+	f, _ := model.FieldByColumn(col)
+	if f == nil {
+		return &FieldStat{}
+	}
+	return &FieldStat{Field: *f}
+}
+
+// Has сообщает, отслеживает ли пользователь показатель.
+func (s *Stats) Has(col string) bool { _, ok := s.ByField[col]; return ok }
 
 // Input — исходные данные для отчёта.
 type Input struct {
 	From, To string
 	Days     []*model.Day   // записи за период
-	DaysAll  []*model.Day   // записи за длинное окно, для стриков
+	DaysAll  []*model.Day   // записи за длинное окно, для стриков и наблюдений
 	Money    []*model.Money // деньги за период
 	MoneyAll []*model.Money // все деньги по To включительно
 	Notes    []*model.Note  // заметки за период
 	Today    string         // точка отсчёта стриков
 	Cfg      *config.Config // пороги для флагов
-	Profile  string
+	Fields   model.FieldSet // показатели пользователя; nil — все
+	Finance  bool           // показывать деньги
 }
+
+// insightWindow — сколько последних дней берём для поиска связей: за неделю
+// выборки слишком малы, а годовые данные смешивают разные периоды жизни.
+const insightWindow = 90
 
 // Build считает агрегаты по периоду.
 func Build(in Input) *Stats {
-	if in.Profile == "" {
-		in.Profile = config.ProfilePasha
-	}
 	s := &Stats{
-		From: in.From, To: in.To, Profile: in.Profile,
+		From: in.From, To: in.To, Fields: in.Fields, Finance: in.Finance,
 		TotalDays:  DaysBetween(in.From, in.To),
+		Order:      in.Fields.Fields(),
+		ByField:    map[string]*FieldStat{},
 		Currencies: map[string]*CurrencyStats{},
 		Days:       in.Days,
 		Notes:      in.Notes,
 	}
+	for _, f := range s.Order {
+		s.ByField[f.DB] = &FieldStat{Field: f}
+	}
 	for _, d := range in.Days {
-		if d.EmptyFor(in.Profile) {
+		if d.EmptyIn(in.Fields) {
 			continue
 		}
 		s.FilledDays++
-		if d.Wake != nil {
-			if h, ok := model.TimeToHours(*d.Wake); ok {
-				s.Wake.Add(d.Date, h)
-			}
-		}
-		if d.Bed != nil {
-			if h, ok := model.TimeToHours(*d.Bed); ok {
-				s.Bed.Add(d.Date, h)
-			}
-		}
-		if d.Algorithms != nil {
-			s.Algorithms.Add(d.Date, float64(*d.Algorithms))
-			if *d.Algorithms > 0 {
-				s.AlgorithmDays++
-			}
-		}
-		if d.SystemDesign != nil {
-			s.SystemDesign.Add(d.Date, float64(*d.SystemDesign))
-			if *d.SystemDesign > 0 {
-				s.SystemDesignDays++
-			}
-		}
-		if d.Mood != nil {
-			s.Mood.Add(d.Date, float64(*d.Mood))
-		}
-		if d.Workout != nil && *d.Workout {
-			s.Workouts++
-		}
-		if d.Walk != nil && *d.Walk {
-			s.Walks++
-		}
-		if d.Study != nil && *d.Study {
-			s.StudyDays++
-		}
-		if d.Useful != nil && strings.TrimSpace(*d.Useful) != "" {
-			s.UsefulDays++
-		}
-		if d.Sweet != nil {
-			s.SweetKnown++
-			if *d.Sweet {
-				s.SweetDays++
-			}
-		}
-		if d.Alcohol != nil {
-			s.AlcoholKnown++
-			if *d.Alcohol {
-				s.AlcoholDays++
+		for _, f := range s.Order {
+			if f.IsSet(d) {
+				s.ByField[f.DB].add(d)
 			}
 		}
 	}
-	s.Streaks = ComputeStreaksFor(in.DaysAll, in.Today, in.Profile)
+	s.Streaks = ComputeStreaksIn(in.DaysAll, in.Today, in.Fields)
+	s.Insights = FindInsights(lastDays(in.DaysAll, in.To, insightWindow), in.Fields)
 
-	for _, m := range in.Money {
-		c := s.cur(m.Currency)
-		switch m.Kind {
-		case model.MoneyIncome:
-			c.Income += m.Amount
-		case model.MoneyExpense:
-			c.Expense += m.Amount
-		case model.MoneySaving:
-			c.Saved += m.Amount
+	if in.Finance {
+		for _, m := range in.Money {
+			c := s.cur(m.Currency)
+			switch m.Kind {
+			case model.MoneyIncome:
+				c.Income += m.Amount
+			case model.MoneyExpense:
+				c.Expense += m.Amount
+			case model.MoneySaving:
+				c.Saved += m.Amount
+			}
 		}
-	}
-	for _, m := range in.MoneyAll {
-		if m.Kind == model.MoneySaving {
-			s.cur(m.Currency).Capital += m.Amount
+		for _, m := range in.MoneyAll {
+			if m.Kind == model.MoneySaving {
+				s.cur(m.Currency).Capital += m.Amount
+			}
 		}
 	}
 	s.CurOrder = make([]string, 0, len(s.Currencies))
@@ -270,6 +246,38 @@ func Build(in Input) *Stats {
 		s.Flags = flags(s, in.Cfg)
 	}
 	return s
+}
+
+func (fs *FieldStat) add(d *model.Day) {
+	f := &fs.Field
+	fs.Known++
+	if done := f.Done(d); done != nil && *done {
+		fs.Yes++
+	}
+	switch v := f.Get(d).(type) {
+	case *int:
+		fs.Series.Add(d.Date, float64(*v))
+	case *float64:
+		fs.Series.Add(d.Date, *v)
+	case *string:
+		if f.Kind == model.KindTime {
+			if h, ok := model.TimeToHours(*v); ok {
+				fs.Series.Add(d.Date, h)
+			}
+		}
+	}
+}
+
+// lastDays оставляет записи за n дней по to включительно.
+func lastDays(days []*model.Day, to string, n int) []*model.Day {
+	from := AddDays(to, -(n - 1))
+	var out []*model.Day
+	for _, d := range days {
+		if d.Date >= from && d.Date <= to {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func (s *Stats) cur(code string) *CurrencyStats {
@@ -300,10 +308,10 @@ func (s *Stats) Main() *CurrencyStats {
 // один раз и срабатывают сами.
 func flags(s *Stats, cfg *config.Config) []string {
 	var out []string
-	if s.Wake.N() > 1 && s.Wake.Spread() > cfg.MaxWakeSpreadH {
-		out = append(out, fmt.Sprintf("разброс подъёма %.1f ч при пороге %.1f", s.Wake.Spread(), cfg.MaxWakeSpreadH))
+	if wake := s.Field("wake").Series; s.Has("wake") && wake.N() > 1 && wake.Spread() > cfg.MaxWakeSpreadH {
+		out = append(out, fmt.Sprintf("разброс подъёма %.1f ч при пороге %.1f", wake.Spread(), cfg.MaxWakeSpreadH))
 	}
-	if s.Profile != config.ProfileSveta {
+	if s.Finance {
 		if rate, ok := s.Main().SavingsRate(); ok && rate < cfg.MinSavingsRate {
 			out = append(out, fmt.Sprintf("норма сбережений %.0f%% при норме ≥%.0f%%", rate*100, cfg.MinSavingsRate*100))
 		}

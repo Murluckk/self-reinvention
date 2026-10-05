@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/murluckk/self-reinvention/internal/config"
 	"github.com/murluckk/self-reinvention/internal/model"
 	"github.com/murluckk/self-reinvention/internal/parse"
 )
@@ -21,53 +20,50 @@ func Markdown(s *Stats) string {
 	p("Заполнено дней: **%d из %d**", s.FilledDays, s.TotalDays)
 	p("")
 
-	p("## Режим")
-	if s.Wake.N() > 0 {
-		mn, _ := s.Wake.Min()
-		mx, _ := s.Wake.Max()
-		p("- подъём: с %s до %s, разброс **%.1f ч**", hhmm(mn), hhmm(mx), s.Wake.Spread())
-	} else {
-		p("- подъём: нет данных")
+	var timed, habits, limits, scales []model.Field
+	for _, f := range s.Order {
+		switch {
+		case f.Kind == model.KindTime:
+			timed = append(timed, f)
+		case f.Kind == model.KindScale:
+			scales = append(scales, f)
+		case f.Bad:
+			limits = append(limits, f)
+		default:
+			habits = append(habits, f)
+		}
 	}
-	if s.Bed.N() > 0 {
-		p("- последнее засыпание: **%s** (за %s)", hhmm(s.Bed.Values[s.Bed.N()-1]), days(s.Bed.N()))
-	} else {
-		p("- засыпание: нет данных")
-	}
-	p("")
-
-	p("## Тренировки")
-	p("- всего: **%d**", s.Workouts)
-	p("")
-
-	if s.Profile == config.ProfileSveta {
-		p("## Активность и развитие")
-		p("- прогулки: **%d**", s.Walks)
-		p("- учёба: **%s**", days(s.StudyDays))
-		p("- полезные занятия: **%s**", days(s.UsefulDays))
-	} else {
-		p("## Развитие")
-		p("- алгоритмы: **%.0f мин**, %s", s.Algorithms.Sum(), days(s.AlgorithmDays))
-		p("- системный дизайн: **%.0f мин**, %s", s.SystemDesign.Sum(), days(s.SystemDesignDays))
-	}
-	p("")
-
-	p("## Состояние")
-	if s.Mood.N() == 0 {
-		p("- нет данных")
-	} else if s.Mood.N() < 4 {
-		p("- среднее **%.1f/10** (за %s)", s.Mood.Avg(), days(s.Mood.N()))
-	} else {
-		p("- среднее **%.1f/10**, динамика %+.1f", s.Mood.Avg(), s.Mood.HalfDelta())
-	}
-	p("")
-
-	if s.Profile == config.ProfileSveta {
-		p("## Питание")
-		p("- сладкое: **%d из %d** отмеченных дней", s.SweetDays, s.SweetKnown)
-		p("- алкоголь: **%d из %d** отмеченных дней", s.AlcoholDays, s.AlcoholKnown)
+	section := func(title string, fs []model.Field, line func(model.Field) string) {
+		if len(fs) == 0 {
+			return
+		}
+		p("## %s", title)
+		for _, f := range fs {
+			p("- %s", line(f))
+		}
 		p("")
-	} else {
+	}
+	section("Режим", timed, func(f model.Field) string {
+		st := s.Field(f.DB)
+		if st.Series.N() == 0 {
+			return strings.ToLower(f.Label) + ": нет данных"
+		}
+		avg, spread := st.TimeAvg()
+		return fmt.Sprintf("%s: в среднем **%s**, разброс **%.1f ч** (за %s)",
+			strings.ToLower(f.Label), clock(avg), spread, days(st.Series.N()))
+	})
+	section("Привычки и занятия", habits, func(f model.Field) string {
+		return fmt.Sprintf("%s: **%s**", strings.ToLower(f.Label), s.Field(f.DB).Summary())
+	})
+	section("Ограничения", limits, func(f model.Field) string {
+		st := s.Field(f.DB)
+		return fmt.Sprintf("%s: **%d из %d** отмеченных дней", strings.ToLower(f.Label), st.Yes, st.Known)
+	})
+	section("Состояние", scales, func(f model.Field) string {
+		return fmt.Sprintf("%s: **%s**", strings.ToLower(f.Label), s.Field(f.DB).Summary())
+	})
+
+	if s.Finance {
 		p("## Деньги")
 		if len(s.CurOrder) == 0 {
 			p("- за период записей нет")
@@ -89,18 +85,24 @@ func Markdown(s *Stats) string {
 	}
 
 	p("## Стрики")
-	if s.Profile == config.ProfileSveta {
-		p("- учёба подряд: **%d**", s.Streaks.Study)
-		p("- прогулки подряд: **%d**", s.Streaks.Walk)
-		p("- тренировки подряд: **%d**", s.Streaks.Workout)
-		p("- полезные занятия подряд: **%d**", s.Streaks.Useful)
-	} else {
-		p("- алгоритмы подряд: **%d**", s.Streaks.Algorithms)
-		p("- системный дизайн подряд: **%d**", s.Streaks.SystemDesign)
-		p("- тренировки подряд: **%d**", s.Streaks.Workout)
+	for _, f := range s.Order {
+		if f.Habit() {
+			p("- %s подряд: **%d**", strings.ToLower(f.Label), s.Streaks.Of(f.DB))
+		}
 	}
 	p("- заполненных записей подряд: **%d**", s.Streaks.Filled)
 	p("")
+
+	if len(s.Insights) > 0 {
+		p("## Наблюдения за %d дней", insightWindow)
+		p("")
+		p("Связи, а не причины: повод присмотреться, а не вывод.")
+		p("")
+		for _, in := range s.Insights {
+			p("- %s", in.Text)
+		}
+		p("")
+	}
 
 	p("## Флаги")
 	if len(s.Flags) == 0 {
@@ -113,7 +115,7 @@ func Markdown(s *Stats) string {
 
 	p("## По дням")
 	p("")
-	b.WriteString(dayTable(s.Days, s.Profile))
+	b.WriteString(dayTable(s.Days, s.Fields))
 	p("")
 
 	p("## Заметки")
@@ -140,24 +142,17 @@ func Markdown(s *Stats) string {
 
 // dayTable рисует таблицу по дням: она нужна, чтобы на разборе можно было
 // глазами найти конкретный день, а не только средние.
-func dayTable(days []*model.Day, profile string) string {
-	cols := []string{"wake", "bed", "algorithms", "system_design", "workout", "mood"}
-	if profile == config.ProfileSveta {
-		cols = []string{"wake", "bed", "workout", "walk", "study", "useful", "mood", "sweet", "alcohol"}
-	}
-	var fs []model.Field
+func dayTable(days []*model.Day, set model.FieldSet) string {
+	fs := set.Fields()
 	head := []string{"дата", "дн"}
-	for _, c := range cols {
-		if f, ok := model.FieldByColumn(c); ok {
-			fs = append(fs, *f)
-			head = append(head, f.Label)
-		}
+	for _, f := range fs {
+		head = append(head, f.Label)
 	}
 	var b strings.Builder
 	b.WriteString("| " + strings.Join(head, " | ") + " |\n")
 	b.WriteString("|" + strings.Repeat("---|", len(head)) + "\n")
 	for _, d := range days {
-		if d.EmptyFor(profile) {
+		if d.EmptyIn(set) {
 			continue
 		}
 		row := []string{d.Date, Weekday(d.Date)}

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/murluckk/self-reinvention/internal/config"
 	"github.com/murluckk/self-reinvention/internal/model"
 	"github.com/murluckk/self-reinvention/internal/parse"
 	"github.com/murluckk/self-reinvention/internal/report"
@@ -50,20 +49,11 @@ func (b *Bot) dropPending(id string) {
 	delete(b.pending, id)
 }
 
-func (b *Bot) expirePending() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for id, p := range b.pending {
-		if time.Since(p.created) > pendingTTL {
-			delete(b.pending, id)
-		}
-	}
-}
-
 // handleVoice ведёт голосовое по пайплайну: скачать → сконвертировать → ASR →
 // разбор → подтверждение. На любом обрыве данные не теряются: сообщение
 // оседает заметкой с пометкой, что распознать не удалось.
-func (b *Bot) handleVoice(ctx context.Context, userID int64, m *tg.Message, v *tg.Voice) {
+func (b *Bot) handleVoice(ctx context.Context, user *model.User, m *tg.Message, v *tg.Voice) {
+	userID := user.ID
 	status, err := b.tg.SendMessage(ctx, m.Chat.ID, "🎧 Слушаю…", nil)
 	if err != nil {
 		b.log.Error("sendMessage", "err", err)
@@ -78,11 +68,12 @@ func (b *Bot) handleVoice(ctx context.Context, userID int64, m *tg.Message, v *t
 	text, err := b.transcribe(ctx, v)
 	if err != nil {
 		b.log.Error("распознавание", "err", err)
-		edit(b.saveUnrecognized(userID, v, err), nil)
+		b.alert(ctx, "asr", "Голосовое не распознано ни облаком, ни локально: "+err.Error())
+		edit(b.saveUnrecognized(user, v, err), nil)
 		return
 	}
 
-	date := b.today(userID)
+	date := user.Today()
 	res := parse.ParseVoiceRegex(text, date)
 	// Каждую расшифровку отдаём LLM; регулярки остаются быстрым фолбэком на
 	// случай недоступности API и дополняют пропущенные моделью поля.
@@ -93,6 +84,7 @@ func (b *Bot) handleVoice(ctx context.Context, userID int64, m *tg.Message, v *t
 		switch {
 		case lerr != nil:
 			b.log.Error("llm-парсер", "err", lerr)
+			b.alert(ctx, "llm", "LLM-разбор голосового упал, работаю на регулярках: "+lerr.Error())
 			if res.Recogn == 0 {
 				res.Note = text // ничего не поняли — сохраним хотя бы дословно
 				res.Level = "none"
@@ -108,9 +100,8 @@ func (b *Bot) handleVoice(ctx context.Context, userID int64, m *tg.Message, v *t
 			res = llmRes
 		}
 	}
-	profile := b.profile(userID)
-	res.Day.KeepProfile(profile)
-	if profile == config.ProfileSveta {
+	res.Day.Keep(user.Fields)
+	if !user.Finance {
 		res.Money = nil
 	}
 	res.Recogn = res.Count()
@@ -130,60 +121,67 @@ func (b *Bot) handleVoice(ctx context.Context, userID int64, m *tg.Message, v *t
 
 // transcribe скачивает голосовое, конвертирует в 16 кГц моно wav и отдаёт в ASR.
 func (b *Bot) transcribe(ctx context.Context, v *tg.Voice) (string, error) {
+	text, cloudErr, err := b.transcribeWithFallback(ctx, v)
+	if err == nil && cloudErr != nil {
+		b.alert(ctx, "asr-cloud", "Облачное распознавание недоступно, работаю на локальном Whisper: "+cloudErr.Error())
+	}
+	return text, err
+}
+
+func (b *Bot) transcribeWithFallback(ctx context.Context, v *tg.Voice) (text string, cloudErr error, err error) {
 	if b.asr == nil {
-		return "", fmt.Errorf("asr не настроен")
+		return "", nil, fmt.Errorf("asr не настроен")
 	}
 	f, err := b.tg.GetFile(ctx, v.FileID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	data, err := b.tg.Download(ctx, f.FilePath)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	target := b.asr
-	var cloudErr error
 	if b.asr.DirectAudio() {
 		name := cloudAudioName(f.FilePath)
 		if text, err := b.asr.Transcribe(ctx, data, name); err == nil {
-			return text, nil
+			return text, nil, nil
 		} else {
 			cloudErr = err
 			b.log.Warn("облачное распознавание недоступно, пробую локальное", "err", err)
 		}
 		target = b.asrFallback
 		if target == nil {
-			return "", cloudErr
+			return "", nil, cloudErr
 		}
 	}
 	dir, err := os.MkdirTemp("", "voice")
 	if err != nil {
-		return "", err
+		return "", cloudErr, err
 	}
 	defer os.RemoveAll(dir)
 	in := filepath.Join(dir, "in"+ext(f.FilePath))
 	out := filepath.Join(dir, "out.wav")
 	if err := os.WriteFile(in, data, 0o600); err != nil {
-		return "", err
+		return "", cloudErr, err
 	}
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, "ffmpeg", "-y", "-loglevel", "error", "-i", in, "-ar", "16000", "-ac", "1", out)
 	if stderr, err := cmd.CombinedOutput(); err != nil {
 		if cloudErr != nil {
-			return "", fmt.Errorf("облачный ASR: %v; локальный ffmpeg: %v: %s", cloudErr, err, strings.TrimSpace(string(stderr)))
+			return "", cloudErr, fmt.Errorf("облачный ASR: %v; локальный ffmpeg: %v: %s", cloudErr, err, strings.TrimSpace(string(stderr)))
 		}
-		return "", fmt.Errorf("ffmpeg: %v: %s", err, strings.TrimSpace(string(stderr)))
+		return "", nil, fmt.Errorf("ffmpeg: %v: %s", err, strings.TrimSpace(string(stderr)))
 	}
 	wav, err := os.ReadFile(out)
 	if err != nil {
-		return "", err
+		return "", cloudErr, err
 	}
-	text, err := target.Transcribe(ctx, wav, "voice.wav")
+	text, err = target.Transcribe(ctx, wav, "voice.wav")
 	if err != nil && cloudErr != nil {
-		return "", fmt.Errorf("облачный ASR: %v; локальный ASR: %w", cloudErr, err)
+		return "", cloudErr, fmt.Errorf("облачный ASR: %v; локальный ASR: %w", cloudErr, err)
 	}
-	return text, err
+	return text, cloudErr, err
 }
 
 func cloudAudioName(path string) string {
@@ -207,10 +205,11 @@ func ext(path string) string {
 // saveUnrecognized — фолбэк: ни одно сообщение не должно пропасть из-за
 // упавшего сервиса. Сам файл остаётся на серверах Telegram, в заметке лежит
 // его id, так что расшифровать можно будет позже.
-func (b *Bot) saveUnrecognized(userID int64, v *tg.Voice, cause error) string {
+func (b *Bot) saveUnrecognized(user *model.User, v *tg.Voice, cause error) string {
+	userID := user.ID
 	n := &model.Note{
-		TS:   b.now(userID),
-		Date: b.today(userID),
+		TS:   user.Now(),
+		Date: user.Today(),
 		Tag:  "нераспознано",
 		Text: fmt.Sprintf("голосовое %d сек, распознать не удалось (%v); file_id=%s", v.Duration, cause, v.FileID),
 	}
@@ -225,7 +224,7 @@ func (b *Bot) saveUnrecognized(userID int64, v *tg.Voice, cause error) string {
 func confirmKeyboard(id string) *tg.InlineKeyboardMarkup {
 	return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
 		{tg.Button("✅ Записать", "v:ok:"+id), tg.Button("✖️ Отменить", "v:no:"+id)},
-		{tg.Button("📝 Показать текст", "v:raw:"+id)},
+		{tg.Button("✏️ Исправить", "v:ed:"+id), tg.Button("📝 Показать текст", "v:raw:"+id)},
 	}}
 }
 
@@ -269,57 +268,176 @@ func voiceDump(v *parse.Voice) map[string]any {
 	return out
 }
 
-func (b *Bot) handleCallback(ctx context.Context, userID int64, cb *tg.CallbackQuery) {
-	parts := strings.SplitN(cb.Data, ":", 3)
-	if len(parts) != 3 || parts[0] != "v" {
-		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "")
-		return
-	}
-	action, id := parts[1], parts[2]
-	p := b.getPending(id)
-	if p == nil || p.userID != userID {
-		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "Эта карточка уже неактуальна")
-		if cb.Message != nil {
-			_ = b.tg.EditMessageText(ctx, cb.Message.Chat.ID, cb.Message.MessageID,
-				"⌛️ Карточка устарела — наговори заново.", nil)
-		}
-		return
-	}
-	chatID, msgID := userID, int64(0)
-	if cb.Message != nil {
-		chatID, msgID = cb.Message.Chat.ID, cb.Message.MessageID
-	}
-	switch action {
-	case "raw":
-		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "")
-		_ = b.tg.EditMessageText(ctx, chatID, msgID, confirmationText(p.voice, true, p.raw), confirmKeyboard(id))
-	case "no":
-		b.dropPending(id)
-		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "Отменено")
-		_ = b.tg.EditMessageText(ctx, chatID, msgID, "✖️ Отменил, ничего не записал.\n\nРасшифровка:\n"+p.raw, nil)
-	case "ok":
-		b.dropPending(id)
-		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "Записано")
-		_ = b.tg.EditMessageText(ctx, chatID, msgID, b.applyVoice(p), nil)
+func (b *Bot) handleCallback(ctx context.Context, user *model.User, cb *tg.CallbackQuery) {
+	switch {
+	case strings.HasPrefix(cb.Data, "v:"):
+		b.handleVoiceCallback(ctx, user, cb)
+	case strings.HasPrefix(cb.Data, "c:"):
+		b.handleCheckinCallback(ctx, user, cb)
+	case strings.HasPrefix(cb.Data, "f:"):
+		b.handleFieldsCallback(ctx, user, cb)
+	case strings.HasPrefix(cb.Data, "tz:"):
+		b.handleTimezoneCallback(ctx, user, cb)
 	default:
 		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "")
 	}
 }
 
+// handleVoiceCallback — кнопки под карточкой голосового:
+// v:<действие>:<id>[:<колонка>[:<значение>]].
+func (b *Bot) handleVoiceCallback(ctx context.Context, user *model.User, cb *tg.CallbackQuery) {
+	parts := strings.SplitN(cb.Data, ":", 5)
+	if len(parts) < 3 {
+		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "")
+		return
+	}
+	action, id := parts[1], parts[2]
+	col, val := "", ""
+	if len(parts) > 3 {
+		col = parts[3]
+	}
+	if len(parts) > 4 {
+		val = parts[4]
+	}
+	p := b.getPending(id)
+	if p == nil || p.userID != user.ID {
+		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "Эта карточка уже неактуальна")
+		if cb.Message != nil {
+			b.edit(ctx, cb.Message.Chat.ID, cb.Message.MessageID, "⌛️ Карточка устарела — наговори заново.", nil)
+		}
+		return
+	}
+	chatID, msgID := user.ID, int64(0)
+	if cb.Message != nil {
+		chatID, msgID = cb.Message.Chat.ID, cb.Message.MessageID
+	}
+	card := func() { b.edit(ctx, chatID, msgID, confirmationText(p.voice, false, ""), confirmKeyboard(id)) }
+	switch action {
+	case "raw":
+		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "")
+		b.edit(ctx, chatID, msgID, confirmationText(p.voice, true, p.raw), confirmKeyboard(id))
+	case "no":
+		b.dropPending(id)
+		b.dropEdit(user.ID)
+		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "Отменено")
+		b.edit(ctx, chatID, msgID, "✖️ Отменил, ничего не записал.\n\nРасшифровка:\n"+p.raw, nil)
+	case "ok":
+		b.dropPending(id)
+		b.dropEdit(user.ID)
+		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "Записано")
+		b.edit(ctx, chatID, msgID, b.applyVoice(ctx, p), nil)
+	case "ed":
+		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "")
+		b.dropEdit(user.ID)
+		b.edit(ctx, chatID, msgID, confirmationText(p.voice, false, "")+"\n\n✏️ Какое поле поправить?",
+			fieldPicker(user.Fields, p.voice.Day, "v:pick:"+id+":",
+				[]tg.InlineKeyboardButton{tg.Button("↩️ Назад", "v:back:"+id)}))
+	case "pick":
+		f, ok := model.FieldByColumn(col)
+		if !ok {
+			_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "")
+			return
+		}
+		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "")
+		b.mu.Lock()
+		b.edits[user.ID] = &fieldEdit{pendingID: id, col: col, chatID: chatID, msgID: msgID, created: time.Now()}
+		b.mu.Unlock()
+		current := ""
+		if f.IsSet(p.voice.Day) {
+			current = "\nСейчас: " + f.FormatValue(p.voice.Day)
+		}
+		b.edit(ctx, chatID, msgID, fieldQuestion(f)+current,
+			fieldKeyboard(f, "v:set:"+id+":"+col+":", []tg.InlineKeyboardButton{
+				tg.Button("🗑 Убрать", "v:clr:"+id+":"+col), tg.Button("↩️ Назад", "v:back:"+id),
+			}))
+	case "set":
+		f, ok := model.FieldByColumn(col)
+		if !ok {
+			_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "")
+			return
+		}
+		if err := parse.SetValue(p.voice.Day, f, val); err != nil {
+			_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "Не подошло: "+err.Error())
+			return
+		}
+		b.dropEdit(user.ID)
+		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "Исправил")
+		card()
+	case "clr":
+		if f, ok := model.FieldByColumn(col); ok {
+			f.Clear(p.voice.Day)
+		}
+		b.dropEdit(user.ID)
+		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "Убрал")
+		card()
+	case "back":
+		b.dropEdit(user.ID)
+		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "")
+		card()
+	default:
+		_ = b.tg.AnswerCallbackQuery(ctx, cb.ID, "")
+	}
+}
+
+// fieldEdit — ожидание текстового значения для поля голосовой карточки.
+type fieldEdit struct {
+	pendingID string
+	col       string
+	chatID    int64
+	msgID     int64
+	created   time.Time
+}
+
+func (b *Bot) dropEdit(userID int64) {
+	b.mu.Lock()
+	delete(b.edits, userID)
+	b.mu.Unlock()
+}
+
+// answerEdit принимает значение поля, введённое текстом во время правки.
+func (b *Bot) answerEdit(ctx context.Context, user *model.User, chatID int64, text string) bool {
+	b.mu.Lock()
+	e := b.edits[user.ID]
+	b.mu.Unlock()
+	if e == nil || e.chatID != chatID {
+		return false
+	}
+	p := b.getPending(e.pendingID)
+	f, ok := model.FieldByColumn(e.col)
+	if p == nil || !ok {
+		b.dropEdit(user.ID)
+		return false
+	}
+	if err := parse.SetValue(p.voice.Day, f, text); err != nil {
+		b.reply(ctx, chatID, fmt.Sprintf("Не понял значение для «%s»: %v. Попробуй ещё раз или нажми «Назад».", f.Label, err))
+		return true
+	}
+	b.dropEdit(user.ID)
+	b.edit(ctx, e.chatID, e.msgID, "✏️ Исправлено, карточка ниже ⬇️", nil)
+	if m := b.send(ctx, chatID, confirmationText(p.voice, false, ""), confirmKeyboard(e.pendingID)); m == nil {
+		b.reply(ctx, chatID, "Не смог показать карточку заново — наговори голосовое ещё раз.")
+	}
+	return true
+}
+
 // applyVoice пишет подтверждённое в базу и возвращает текст для чата.
-func (b *Bot) applyVoice(p *pending) string {
+func (b *Bot) applyVoice(ctx context.Context, p *pending) string {
 	v := p.voice
+	user, ok := b.user(p.userID)
+	if !ok {
+		return "Доступ к трекеру закрыт — ничего не записал."
+	}
 	var out []string
 	if v.Day != nil && !v.Day.Empty() {
 		if err := b.st.UpsertDay(p.userID, v.Day); err != nil {
 			b.log.Error("запись дня из голосового", "err", err)
 			out = append(out, "⚠️ запись дня не сохранилась: "+err.Error())
 		} else {
-			out = append(out, b.dayConfirmation(p.userID, v.Day.Date, v.Day))
+			out = append(out, b.dayConfirmation(ctx, user, v.Day.Date, v.Day))
 		}
 	}
 	for _, m := range v.Money {
-		m.TS = b.now(p.userID)
+		m.TS = user.Now()
 		if err := b.st.AddMoney(p.userID, m); err != nil {
 			b.log.Error("запись денег из голосового", "err", err)
 			out = append(out, "⚠️ деньги не сохранились: "+err.Error())
@@ -328,7 +446,7 @@ func (b *Bot) applyVoice(p *pending) string {
 		out = append(out, "💰 "+parse.FormatMoney(m))
 	}
 	if note := strings.TrimSpace(v.Note); note != "" {
-		n := &model.Note{TS: b.now(p.userID), Date: b.today(p.userID), Text: note}
+		n := &model.Note{TS: user.Now(), Date: user.Today(), Text: note}
 		if err := b.st.AddNote(p.userID, n); err != nil {
 			b.log.Error("запись заметки из голосового", "err", err)
 			out = append(out, "⚠️ заметка не сохранилась: "+err.Error())

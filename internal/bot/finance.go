@@ -23,7 +23,11 @@ func (b *Bot) RemindIncome(ctx context.Context, userID int64, title string) erro
 // SendMonthlyFinance присылает итог прошлого календарного месяца и, когда LLM
 // настроена, добавляет короткий анализ структуры расходов.
 func (b *Bot) SendMonthlyFinance(ctx context.Context, userID int64) error {
-	now := b.now(userID)
+	user, ok := b.user(userID)
+	if !ok {
+		return nil
+	}
+	now := user.Now()
 	thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	start := thisMonth.AddDate(0, -1, 0)
 	end := thisMonth.AddDate(0, 0, -1)

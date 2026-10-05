@@ -39,26 +39,33 @@ func buildTrackerStats() *Stats {
 			{Date: "2026-08-19", Kind: model.MoneyExpense, Amount: 1200, Currency: "RUB"},
 			{Date: "2026-08-19", Kind: model.MoneySaving, Amount: 150000, Currency: "RUB"},
 		},
-		Notes: []*model.Note{{Date: "2026-08-19", Tag: "идея", Text: "заниматься утром"}},
-		Cfg:   &config.Config{MaxWakeSpreadH: 1.5, MinSavingsRate: .55},
+		Notes:   []*model.Note{{Date: "2026-08-19", Tag: "идея", Text: "заниматься утром"}},
+		Cfg:     &config.Config{MaxWakeSpreadH: 1.5, MinSavingsRate: .55},
+		Fields:  preset("pasha"),
+		Finance: true,
 	})
+}
+
+func preset(name string) model.FieldSet {
+	p, _ := model.PresetByName(name)
+	return p.Fields
 }
 
 func TestBuildTrackerStats(t *testing.T) {
 	st := buildTrackerStats()
-	if st.FilledDays != 7 || st.Workouts != 5 {
-		t.Fatalf("заполнено=%d тренировки=%d", st.FilledDays, st.Workouts)
+	if st.FilledDays != 7 || st.Field("workout").Yes != 5 {
+		t.Fatalf("заполнено=%d тренировки=%d", st.FilledDays, st.Field("workout").Yes)
 	}
-	if st.Algorithms.Sum() != 230 || st.AlgorithmDays != 6 {
-		t.Fatalf("алгоритмы: sum=%.0f days=%d", st.Algorithms.Sum(), st.AlgorithmDays)
+	if a := st.Field("algorithms"); a.Series.Sum() != 230 || a.Yes != 6 {
+		t.Fatalf("алгоритмы: sum=%.0f days=%d", a.Series.Sum(), a.Yes)
 	}
-	if st.SystemDesign.Sum() != 175 || st.SystemDesignDays != 5 {
-		t.Fatalf("системный дизайн: sum=%.0f days=%d", st.SystemDesign.Sum(), st.SystemDesignDays)
+	if sd := st.Field("system_design"); sd.Series.Sum() != 175 || sd.Yes != 5 {
+		t.Fatalf("системный дизайн: sum=%.0f days=%d", sd.Series.Sum(), sd.Yes)
 	}
-	if st.Mood.Avg() != 51.0/7 {
-		t.Fatalf("состояние: %.2f", st.Mood.Avg())
+	if st.Field("mood").Series.Avg() != 51.0/7 {
+		t.Fatalf("состояние: %.2f", st.Field("mood").Series.Avg())
 	}
-	if st.Streaks.Algorithms != 4 || st.Streaks.Workout != 2 || st.Streaks.Filled != 7 {
+	if st.Streaks.Of("algorithms") != 4 || st.Streaks.Of("workout") != 2 || st.Streaks.Filled != 7 {
 		t.Fatalf("стрики: %+v", st.Streaks)
 	}
 	rub := st.Currencies["RUB"]
@@ -69,7 +76,7 @@ func TestBuildTrackerStats(t *testing.T) {
 
 func TestMarkdownUsesSimplifiedSchema(t *testing.T) {
 	md := Markdown(buildTrackerStats())
-	for _, want := range []string{"## Режим", "## Развитие", "Алгоритмы", "Системный дизайн", "## Тренировки", "## Деньги", "заниматься утром"} {
+	for _, want := range []string{"## Режим", "## Привычки и занятия", "алгоритмы", "системный дизайн", "тренировка", "## Деньги", "заниматься утром", "| Алгоритмы |"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("нет %q:\n%s", want, md)
 		}
@@ -84,7 +91,7 @@ func TestMarkdownUsesSimplifiedSchema(t *testing.T) {
 func TestStatusContainsCapitalAndLearning(t *testing.T) {
 	st := buildTrackerStats()
 	text := Status(st.Days[len(st.Days)-1], st)
-	for _, want := range []string{"Капитал", "алгоритмы", "системный дизайн", "Состояние"} {
+	for _, want := range []string{"Капитал", "алгоритмы", "системный дизайн", "состояние"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("нет %q:\n%s", want, text)
 		}
@@ -99,18 +106,18 @@ func TestSvetaProfileReport(t *testing.T) {
 	}
 	st := Build(Input{
 		From: "2026-08-22", To: "2026-08-24", Today: "2026-08-24",
-		Days: days, DaysAll: days, Profile: config.ProfileSveta,
+		Days: days, DaysAll: days, Fields: preset("sveta"),
 		Cfg: &config.Config{MaxWakeSpreadH: 1.5, MinSavingsRate: .55},
 	})
-	if st.FilledDays != 3 || st.Walks != 3 || st.StudyDays != 2 || st.UsefulDays != 3 ||
-		st.SweetDays != 1 || st.SweetKnown != 3 || st.AlcoholDays != 1 || st.AlcoholKnown != 3 {
+	if st.FilledDays != 3 || st.Field("walk").Yes != 3 || st.Field("study").Yes != 2 || st.Field("useful").Yes != 3 ||
+		st.Field("sweet").Yes != 1 || st.Field("sweet").Known != 3 || st.Field("alcohol").Yes != 1 || st.Field("alcohol").Known != 3 {
 		t.Fatalf("статистика Светы: %+v", st)
 	}
-	if st.Streaks.Walk != 3 || st.Streaks.Study != 0 || st.Streaks.Useful != 3 {
+	if st.Streaks.Of("walk") != 3 || st.Streaks.Of("study") != 0 || st.Streaks.Of("useful") != 3 {
 		t.Fatalf("стрики Светы: %+v", st.Streaks)
 	}
 	md := Markdown(st)
-	for _, want := range []string{"## Активность и развитие", "прогулки", "учёба", "## Питание", "сладкое", "алкоголь", "Полезное занятие"} {
+	for _, want := range []string{"## Привычки и занятия", "прогулка", "учёба", "## Ограничения", "сладкое", "алкоголь", "Полезное занятие"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("нет %q:\n%s", want, md)
 		}
@@ -119,7 +126,64 @@ func TestSvetaProfileReport(t *testing.T) {
 		t.Fatalf("в отчёт Светы попал профиль Паши:\n%s", md)
 	}
 	status := Status(days[len(days)-1], st)
-	if strings.Contains(status, "Капитал") || !strings.Contains(status, "прогулок") {
+	if strings.Contains(status, "Капитал") || !strings.Contains(status, "прогулка: 3 из 3") {
 		t.Fatalf("неверный статус Светы:\n%s", status)
+	}
+}
+
+func TestInsightsFindWorkoutAndNextDayEffects(t *testing.T) {
+	var days []*model.Day
+	// Чередуем: в дни с тренировкой состояние 8, без неё 5; алкоголь портит
+	// следующий день.
+	for i := 0; i < 12; i++ {
+		date := AddDays("2026-08-01", i)
+		workout := i%2 == 0
+		mood := 5
+		if workout {
+			mood = 8
+		}
+		days = append(days, &model.Day{Date: date, Workout: bp(workout), Mood: ip(mood)})
+	}
+	found := FindInsights(days, preset("pasha"))
+	if len(found) == 0 || !strings.Contains(found[0].Text, "Тренировка: да → состояние 8.0, нет → 5.0") {
+		t.Fatalf("нет наблюдения про тренировку: %+v", found)
+	}
+
+	var next []*model.Day
+	for i := 0; i < 12; i++ {
+		alcohol := i%3 == 0
+		next = append(next, &model.Day{Date: AddDays("2026-08-01", i), Alcohol: bp(alcohol), Mood: ip(7)})
+	}
+	for i := 1; i < 12; i++ {
+		if *next[i-1].Alcohol {
+			next[i].Mood = ip(4)
+		}
+	}
+	found = FindInsights(next, preset("sveta"))
+	if len(found) == 0 || !strings.Contains(found[0].Text, "состояние на следующий день") {
+		t.Fatalf("нет наблюдения про следующий день: %+v", found)
+	}
+}
+
+func TestInsightsNeedEnoughData(t *testing.T) {
+	days := []*model.Day{
+		{Date: "2026-08-01", Workout: bp(true), Mood: ip(9)},
+		{Date: "2026-08-02", Workout: bp(false), Mood: ip(3)},
+	}
+	if found := FindInsights(days, preset("pasha")); len(found) != 0 {
+		t.Fatalf("на двух днях не должно быть выводов: %+v", found)
+	}
+}
+
+func TestBedTimeAverageCrossesMidnight(t *testing.T) {
+	st := Build(Input{
+		From: "2026-08-01", To: "2026-08-02", Today: "2026-08-02", Fields: preset("basic"),
+		Days: []*model.Day{
+			{Date: "2026-08-01", Bed: sp("23:30")},
+			{Date: "2026-08-02", Bed: sp("00:30")},
+		},
+	})
+	if got := st.Field("bed").Value(); got != "00:00" {
+		t.Fatalf("среднее засыпание %q, ожидалось 00:00", got)
 	}
 }

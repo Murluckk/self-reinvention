@@ -8,14 +8,14 @@ import (
 
 func TestStreaksBasics(t *testing.T) {
 	st := ComputeStreaks(trackerDays(), "2026-08-24")
-	if st.Algorithms != 4 || st.SystemDesign != 2 || st.Workout != 2 || st.Filled != 7 {
+	if st.Of("algorithms") != 4 || st.Of("system_design") != 2 || st.Of("workout") != 2 || st.Filled != 7 {
 		t.Fatalf("стрики: %+v", st)
 	}
 }
 
 func TestStreaksTodayNotYetFilled(t *testing.T) {
 	st := ComputeStreaks(trackerDays(), "2026-08-25")
-	if st.Algorithms != 4 || st.Filled != 7 {
+	if st.Of("algorithms") != 4 || st.Filled != 7 {
 		t.Fatalf("стрики: %+v", st)
 	}
 }
@@ -26,7 +26,7 @@ func TestStreaksGapBreaks(t *testing.T) {
 		{Date: "2026-08-22", Algorithms: ip(30)},
 		{Date: "2026-08-23", Algorithms: ip(30)},
 	}
-	if got := ComputeStreaks(days, "2026-08-23").Algorithms; got != 2 {
+	if got := ComputeStreaks(days, "2026-08-23").Of("algorithms"); got != 2 {
 		t.Fatalf("стрик %d, ожидалось 2", got)
 	}
 }

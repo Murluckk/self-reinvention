@@ -6,29 +6,38 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/murluckk/self-reinvention/internal/config"
 	"github.com/murluckk/self-reinvention/internal/model"
 	"github.com/murluckk/self-reinvention/internal/parse"
 	"github.com/murluckk/self-reinvention/internal/report"
 	"github.com/murluckk/self-reinvention/internal/tg"
 )
 
-var commandDescriptions = map[string]string{
-	"d":    "запись дня: /d подъем 7:30 трен состояние 8",
-	"m":    "деньги: /m -1200 еда",
-	"s":    "статус: сегодня, неделя, стрики",
-	"w":    "выгрузка за n дней в markdown",
-	"undo": "удалить последнюю заметку или трату",
-	"help": "шпаргалка по синтаксису",
+// commandMenu — меню команд в Telegram. Админские команды в меню не попадают:
+// остальным они всё равно недоступны.
+var commandMenu = []tg.Command{
+	{Command: "c", Description: "вечерний опрос кнопками"},
+	{Command: "d", Description: "запись дня: /d подъем 7:30 трен состояние 8"},
+	{Command: "s", Description: "статус: сегодня, неделя, стрики"},
+	{Command: "w", Description: "выгрузка за n дней в markdown"},
+	{Command: "i", Description: "наблюдения: что влияет на состояние"},
+	{Command: "review", Description: "AI-разбор последней недели"},
+	{Command: "m", Description: "деньги: /m -1200 еда"},
+	{Command: "undo", Description: "удалить последнюю заметку или трату"},
+	{Command: "fields", Description: "что отслеживать"},
+	{Command: "tz", Description: "часовой пояс"},
+	{Command: "friends", Description: "серии друзей"},
+	{Command: "share", Description: "делиться сериями с друзьями"},
+	{Command: "password", Description: "новый пароль от дашборда"},
+	{Command: "help", Description: "шпаргалка"},
 }
 
-func (b *Bot) handleMessage(ctx context.Context, userID int64, m *tg.Message) {
+func (b *Bot) handleMessage(ctx context.Context, user *model.User, m *tg.Message) {
 	if m.Voice != nil || m.Audio != nil {
 		v := m.Voice
 		if v == nil {
 			v = m.Audio
 		}
-		b.handleVoice(ctx, userID, m, v)
+		b.handleVoice(ctx, user, m, v)
 		return
 	}
 	text := strings.TrimSpace(m.Text)
@@ -40,29 +49,57 @@ func (b *Bot) handleMessage(ctx context.Context, userID int64, m *tg.Message) {
 		return
 	}
 	if !strings.HasPrefix(text, "/") {
-		b.handleNote(ctx, userID, m.Chat.ID, text)
+		// Текст во время правки голосовой записи или вечернего опроса — это
+		// ответ на заданный вопрос, а не заметка.
+		if b.answerEdit(ctx, user, m.Chat.ID, text) || b.answerCheckin(ctx, user, m.Chat.ID, text) {
+			return
+		}
+		b.handleNote(ctx, user, m.Chat.ID, text)
 		return
 	}
 	cmd, args := splitCommand(text)
+	chat := m.Chat.ID
 	switch cmd {
 	case "start", "help":
-		b.reply(ctx, m.Chat.ID, helpTextFor(b.profile(userID)))
+		b.reply(ctx, chat, helpText(user, b.isAdmin(user)))
 	case "d":
-		b.handleDay(ctx, userID, m.Chat.ID, args)
+		b.handleDay(ctx, user, chat, args)
+	case "c", "checkin":
+		b.handleCheckinCommand(ctx, user, chat, args)
 	case "m":
-		if b.profile(userID) != config.ProfilePasha {
-			b.reply(ctx, m.Chat.ID, "Для твоего профиля деньги сейчас не отслеживаются.")
+		if !user.Finance {
+			b.reply(ctx, chat, "Финансы у тебя выключены. Включить можно в /fields.")
 			return
 		}
-		b.handleMoney(ctx, userID, m.Chat.ID, args)
+		b.handleMoney(ctx, user, chat, args)
 	case "s":
-		b.handleStatus(ctx, userID, m.Chat.ID)
+		b.handleStatus(ctx, user, chat)
 	case "w":
-		b.handleWeekly(ctx, userID, m.Chat.ID, args)
+		b.handleWeekly(ctx, user, chat, args)
+	case "i", "insights":
+		b.handleInsights(ctx, user, chat)
+	case "review":
+		b.handleReview(ctx, user, chat)
 	case "undo":
-		b.handleUndo(ctx, userID, m.Chat.ID)
+		b.handleUndo(ctx, user, chat)
+	case "fields":
+		b.handleFields(ctx, user, chat)
+	case "tz":
+		b.handleTimezone(ctx, user, chat, args)
+	case "password":
+		b.handlePassword(ctx, user, chat)
+	case "share":
+		b.handleShare(ctx, user, chat)
+	case "friends", "f":
+		b.handleFriends(ctx, user, chat)
+	case "invite", "users", "remove", "health":
+		if !b.isAdmin(user) {
+			b.reply(ctx, chat, fmt.Sprintf("Не знаю команду /%s. /help покажет, что я умею.", cmd))
+			return
+		}
+		b.handleAdmin(ctx, user, chat, cmd, args)
 	default:
-		b.reply(ctx, m.Chat.ID, fmt.Sprintf("Не знаю команду /%s. /help покажет, что я умею.", cmd))
+		b.reply(ctx, chat, fmt.Sprintf("Не знаю команду /%s. /help покажет, что я умею.", cmd))
 	}
 }
 
@@ -80,14 +117,14 @@ func splitCommand(text string) (cmd, args string) {
 	return strings.ToLower(cmd), args
 }
 
-func (b *Bot) handleNote(ctx context.Context, userID, chatID int64, text string) {
+func (b *Bot) handleNote(ctx context.Context, user *model.User, chatID int64, text string) {
 	tag, body := parse.ParseNote(text)
 	if body == "" && tag == "" {
 		b.reply(ctx, chatID, "Пустая заметка.")
 		return
 	}
-	n := &model.Note{TS: b.now(userID), Date: b.today(userID), Tag: tag, Text: body}
-	if err := b.st.AddNote(userID, n); err != nil {
+	n := &model.Note{TS: user.Now(), Date: user.Today(), Tag: tag, Text: body}
+	if err := b.st.AddNote(user.ID, n); err != nil {
 		b.log.Error("сохранение заметки", "err", err)
 		b.reply(ctx, chatID, "Не смог записать заметку: "+err.Error())
 		return
@@ -99,59 +136,60 @@ func (b *Bot) handleNote(ctx context.Context, userID, chatID int64, text string)
 	b.reply(ctx, chatID, "✍️ записал")
 }
 
-func (b *Bot) handleDay(ctx context.Context, userID, chatID int64, args string) {
-	res := parse.ParseDayFor(args, b.today(userID), b.profile(userID))
+func (b *Bot) handleDay(ctx context.Context, user *model.User, chatID int64, args string) {
+	res := parse.ParseDayIn(args, user.Today(), user.Fields)
 	if len(res.Errors) > 0 {
 		b.reply(ctx, chatID, "⚠️ "+strings.Join(res.Errors, "\n⚠️ ")+"\n\n/help — шпаргалка")
 	}
 	if res.Day.Empty() {
 		return
 	}
-	if err := b.st.UpsertDay(userID, res.Day); err != nil {
+	if err := b.st.UpsertDay(user.ID, res.Day); err != nil {
 		b.log.Error("запись дня", "err", err)
 		b.reply(ctx, chatID, "Не смог записать: "+err.Error())
 		return
 	}
-	b.reply(ctx, chatID, b.dayConfirmation(userID, res.Day.Date, res.Day))
+	b.reply(ctx, chatID, b.dayConfirmation(ctx, user, res.Day.Date, res.Day))
 }
 
 // dayConfirmation показывает, что записалось, и что за этот день ещё пусто —
 // чтобы дописать одним сообщением, не заходя в /s.
-func (b *Bot) dayConfirmation(userID int64, date string, written *model.Day) string {
+func (b *Bot) dayConfirmation(ctx context.Context, user *model.User, date string, written *model.Day) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "✅ %s (%s)\n%s", date, report.Weekday(date), parse.Summary(written))
-	full, err := b.st.GetDay(userID, date)
+	full, err := b.st.GetDay(user.ID, date)
 	if err != nil {
 		b.log.Error("чтение дня", "err", err)
 		return sb.String()
 	}
-	if missing := full.MissingFieldsFor(b.profile(userID)); len(missing) > 0 {
+	if missing := full.MissingIn(user.Fields); len(missing) > 0 {
 		names := make([]string, 0, len(missing))
 		for _, f := range missing {
 			names = append(names, f.Keys[0])
 		}
-		fmt.Fprintf(&sb, "\nОсталось: %s", strings.Join(names, ", "))
+		fmt.Fprintf(&sb, "\nОсталось: %s · /c — дозаполнить кнопками", strings.Join(names, ", "))
 	} else {
 		sb.WriteString("\nДень заполнен целиком.")
+		b.onDayClosed(ctx, user, date)
 	}
 	return sb.String()
 }
 
-func (b *Bot) handleMoney(ctx context.Context, userID, chatID int64, args string) {
-	m, err := parse.ParseMoney(args, b.today(userID))
+func (b *Bot) handleMoney(ctx context.Context, user *model.User, chatID int64, args string) {
+	m, err := parse.ParseMoney(args, user.Today())
 	if err != nil {
 		b.reply(ctx, chatID, "⚠️ "+err.Error())
 		return
 	}
-	m.TS = b.now(userID)
-	if err := b.st.AddMoney(userID, m); err != nil {
+	m.TS = user.Now()
+	if err := b.st.AddMoney(user.ID, m); err != nil {
 		b.log.Error("запись денег", "err", err)
 		b.reply(ctx, chatID, "Не смог записать: "+err.Error())
 		return
 	}
 	text := "💰 " + parse.FormatMoney(m)
 	if m.Kind == model.MoneySaving {
-		if all, err := b.st.MoneyUntil(userID, b.today(userID)); err == nil {
+		if all, err := b.st.MoneyUntil(user.ID, user.Today()); err == nil {
 			var capital float64
 			for _, x := range all {
 				if x.Kind == model.MoneySaving && x.Currency == m.Currency {
@@ -164,14 +202,14 @@ func (b *Bot) handleMoney(ctx context.Context, userID, chatID int64, args string
 	b.reply(ctx, chatID, text)
 }
 
-func (b *Bot) handleStatus(ctx context.Context, userID, chatID int64) {
-	today := b.today(userID)
-	day, err := b.st.GetDay(userID, today)
+func (b *Bot) handleStatus(ctx context.Context, user *model.User, chatID int64) {
+	today := user.Today()
+	day, err := b.st.GetDay(user.ID, today)
 	if err != nil {
 		b.reply(ctx, chatID, "Не смог прочитать запись: "+err.Error())
 		return
 	}
-	st, err := b.stats(userID, report.AddDays(today, -6), today)
+	st, err := b.stats(user, report.AddDays(today, -6), today)
 	if err != nil {
 		b.reply(ctx, chatID, "Не смог собрать статистику: "+err.Error())
 		return
@@ -179,7 +217,7 @@ func (b *Bot) handleStatus(ctx context.Context, userID, chatID int64) {
 	b.reply(ctx, chatID, report.Status(day, st))
 }
 
-func (b *Bot) handleWeekly(ctx context.Context, userID, chatID int64, args string) {
+func (b *Bot) handleWeekly(ctx context.Context, user *model.User, chatID int64, args string) {
 	n := b.cfg.WeeklyReportN
 	if args != "" {
 		v, err := strconv.Atoi(strings.Fields(args)[0])
@@ -189,28 +227,28 @@ func (b *Bot) handleWeekly(ctx context.Context, userID, chatID int64, args strin
 		}
 		n = v
 	}
-	if err := b.sendReport(ctx, userID, chatID, n); err != nil {
+	if _, err := b.sendReport(ctx, user, chatID, n); err != nil {
 		b.log.Error("выгрузка", "err", err)
 		b.reply(ctx, chatID, "Не смог собрать выгрузку: "+err.Error())
 	}
 }
 
 // sendReport собирает markdown за n дней и отправляет файлом.
-func (b *Bot) sendReport(ctx context.Context, userID, chatID int64, n int) error {
-	to := b.today(userID)
+func (b *Bot) sendReport(ctx context.Context, user *model.User, chatID int64, n int) (*report.Stats, error) {
+	to := user.Today()
 	from := report.AddDays(to, -(n - 1))
-	st, err := b.stats(userID, from, to)
+	st, err := b.stats(user, from, to)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	md := report.Markdown(st)
 	name := fmt.Sprintf("razbor_%s_%s.md", from, to)
 	caption := fmt.Sprintf("Разбор %s — %s: %d/%d дней, флагов: %d", from, to, st.FilledDays, st.TotalDays, len(st.Flags))
-	return b.tg.SendDocument(ctx, chatID, name, []byte(md), caption)
+	return st, b.tg.SendDocument(ctx, chatID, name, []byte(md), caption)
 }
 
-func (b *Bot) handleUndo(ctx context.Context, userID, chatID int64) {
-	u, err := b.st.LastUndoable(userID)
+func (b *Bot) handleUndo(ctx context.Context, user *model.User, chatID int64) {
+	u, err := b.st.LastUndoable(user.ID)
 	if err != nil {
 		b.reply(ctx, chatID, "Не смог посмотреть последние записи: "+err.Error())
 		return
@@ -219,7 +257,7 @@ func (b *Bot) handleUndo(ctx context.Context, userID, chatID int64) {
 		b.reply(ctx, chatID, "Отменять нечего: ни заметок, ни денежных записей.")
 		return
 	}
-	if err := b.st.Delete(userID, u.Kind, u.ID); err != nil {
+	if err := b.st.Delete(user.ID, u.Kind, u.ID); err != nil {
 		b.reply(ctx, chatID, "Не смог удалить: "+err.Error())
 		return
 	}
@@ -230,53 +268,44 @@ func (b *Bot) handleUndo(ctx context.Context, userID, chatID int64) {
 	b.reply(ctx, chatID, fmt.Sprintf("🗑 Удалил %s: %s", what, u.Descr))
 }
 
-// RemindDay — напоминание закрыть день; вызывается планировщиком.
+// RemindDay — вечернее напоминание; вызывается планировщиком. Вместо текста
+// с синтаксисом сразу начинает опрос кнопками по незаполненным полям.
 func (b *Bot) RemindDay(ctx context.Context, userID int64) error {
-	date := b.today(userID)
-	day, err := b.st.GetDay(userID, date)
+	user, ok := b.user(userID)
+	if !ok {
+		return nil
+	}
+	date := user.Today()
+	day, err := b.st.GetDay(user.ID, date)
 	if err != nil {
 		return err
 	}
-	missing := day.MissingFieldsFor(b.profile(userID))
-	if len(missing) == 0 {
-		return b.Notify(ctx, userID, "🌙 День закрыт полностью. Ничего не жду.")
+	if len(day.MissingIn(user.Fields)) == 0 {
+		return b.Notify(ctx, user.ID, "🌙 День закрыт полностью. Ничего не жду.")
 	}
-	names := make([]string, 0, len(missing))
-	for _, f := range missing {
-		names = append(names, f.Keys[0])
+	header := "🌙 Пора подвести итоги дня. Можно кнопками, можно одним голосовым."
+	if friends := b.closedFriends(user); friends != "" {
+		header += "\n" + friends
 	}
-	text := fmt.Sprintf("🌙 Пора внести итоги за %s (%s).\nНе хватает: %s\n\nОдной строкой: /d %s\nИли просто наговори голосовым.",
-		date, report.Weekday(date), strings.Join(names, ", "), exampleFor(missing))
-	return b.Notify(ctx, userID, text)
+	return b.startCheckin(ctx, user, user.ID, date, header)
 }
 
-// exampleFor строит подсказку из первых незаполненных полей, чтобы не
-// вспоминать синтаксис в полночь.
-func exampleFor(missing []model.Field) string {
-	var parts []string
-	for i, f := range missing {
-		if i >= 4 {
-			break
-		}
-		switch f.Kind {
-		case model.KindBool:
-			parts = append(parts, f.Keys[0])
-		case model.KindTime:
-			parts = append(parts, f.Keys[0]+" 07:00")
-		case model.KindString:
-			value := "заметка"
-			if f.DB == "useful" {
-				value = "книга или обучающее видео"
-			}
-			parts = append(parts, f.Keys[0]+" "+value)
-		default:
-			parts = append(parts, f.Keys[0]+" …")
-		}
-	}
-	return strings.Join(parts, " ")
-}
-
-// SendWeekly отправляет автоматическую недельную выгрузку.
+// SendWeekly отправляет автоматическую недельную выгрузку и AI-разбор.
 func (b *Bot) SendWeekly(ctx context.Context, userID int64) error {
-	return b.sendReport(ctx, userID, userID, b.cfg.WeeklyReportN)
+	user, ok := b.user(userID)
+	if !ok {
+		return nil
+	}
+	st, err := b.sendReport(ctx, user, user.ID, b.cfg.WeeklyReportN)
+	if err != nil {
+		return err
+	}
+	// Выгрузка уже ушла: ошибка разбора не должна заставить планировщик
+	// повторить задачу и прислать файл второй раз.
+	if review := b.review(ctx, st); review != "" {
+		if err := b.Notify(ctx, user.ID, review); err != nil {
+			b.log.Warn("отправка AI-разбора", "user_id", user.ID, "err", err)
+		}
+	}
+	return nil
 }

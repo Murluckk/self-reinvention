@@ -1,21 +1,17 @@
 package report
 
 import (
-	"strings"
-
 	"github.com/murluckk/self-reinvention/internal/model"
 )
 
-// Streaks — счётчики, которые показывает /s.
+// Streaks — серии, которые показывают /s, выгрузка и дашборд.
 type Streaks struct {
-	Algorithms   int // дней подряд с алгоритмами
-	SystemDesign int // дней подряд с системным дизайном
-	Workout      int // дней подряд с тренировкой
-	Walk         int // дней подряд с прогулкой
-	Study        int // дней подряд с учёбой
-	Useful       int // дней подряд с полезным занятием
-	Filled       int // дней подряд с заполненной записью
+	ByField map[string]int // дней подряд по каждой привычке
+	Filled  int            // дней подряд с заполненной записью
 }
+
+// Of возвращает серию по колонке.
+func (s Streaks) Of(col string) int { return s.ByField[col] }
 
 // tri — троичный ответ предиката: да, нет и «нет данных».
 type tri int
@@ -57,18 +53,18 @@ func streak(idx map[string]*model.Day, today, first string, unknownContinues boo
 	return n
 }
 
-// ComputeStreaks считает стрики по всем известным дням. days должны быть
+// ComputeStreaks считает стрики по всем полям. days должны быть
 // отсортированы по дате; today задаёт точку отсчёта.
 func ComputeStreaks(days []*model.Day, today string) Streaks {
-	return ComputeStreaksFor(days, today, "pasha")
+	return ComputeStreaksIn(days, today, nil)
 }
 
-// ComputeStreaksFor считает только серии, относящиеся к профилю пользователя.
-func ComputeStreaksFor(days []*model.Day, today, profile string) Streaks {
+// ComputeStreaksIn считает серии только по показателям пользователя.
+func ComputeStreaksIn(days []*model.Day, today string, fs model.FieldSet) Streaks {
 	idx := make(map[string]*model.Day, len(days))
 	first := ""
 	for _, d := range days {
-		if d.EmptyFor(profile) {
+		if d.EmptyIn(fs) {
 			continue
 		}
 		idx[d.Date] = d
@@ -76,59 +72,25 @@ func ComputeStreaksFor(days []*model.Day, today, profile string) Streaks {
 			first = d.Date
 		}
 	}
-	s := Streaks{}
-	duration := func(value func(*model.Day) *int) func(*model.Day) tri {
-		return func(d *model.Day) tri {
-			v := value(d)
-			if v == nil {
+	s := Streaks{ByField: map[string]int{}}
+	for _, f := range fs.Fields() {
+		if !f.Habit() {
+			continue
+		}
+		s.ByField[f.DB] = streak(idx, today, first, false, func(d *model.Day) tri {
+			done := f.Done(d)
+			switch {
+			case done == nil:
 				return triUnknown
-			}
-			if *v > 0 {
+			case *done:
 				return triYes
+			default:
+				return triNo
 			}
-			return triNo
-		}
-	}
-	s.Algorithms = streak(idx, today, first, false, duration(func(d *model.Day) *int {
-		return d.Algorithms
-	}))
-	s.SystemDesign = streak(idx, today, first, false, duration(func(d *model.Day) *int {
-		return d.SystemDesign
-	}))
-	s.Workout = streak(idx, today, first, false, func(d *model.Day) tri {
-		if d.Workout == nil {
-			return triUnknown
-		}
-		if *d.Workout {
-			return triYes
-		}
-		return triNo
-	})
-	boolStreak := func(value func(*model.Day) *bool) int {
-		return streak(idx, today, first, false, func(d *model.Day) tri {
-			v := value(d)
-			if v == nil {
-				return triUnknown
-			}
-			if *v {
-				return triYes
-			}
-			return triNo
 		})
 	}
-	s.Walk = boolStreak(func(d *model.Day) *bool { return d.Walk })
-	s.Study = boolStreak(func(d *model.Day) *bool { return d.Study })
-	s.Useful = streak(idx, today, first, false, func(d *model.Day) tri {
-		if d.Useful == nil {
-			return triUnknown
-		}
-		if strings.TrimSpace(*d.Useful) != "" {
-			return triYes
-		}
-		return triNo
-	})
 	s.Filled = streak(idx, today, first, false, func(d *model.Day) tri {
-		if d.EmptyFor(profile) {
+		if d.EmptyIn(fs) {
 			return triNo
 		}
 		return triYes

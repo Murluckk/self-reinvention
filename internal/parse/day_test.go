@@ -90,9 +90,9 @@ func TestParseDayRejectsDurationYesWithoutMinutes(t *testing.T) {
 }
 
 func TestParseDaySvetaProfile(t *testing.T) {
-	res := ParseDayFor(
+	res := ParseDayIn(
 		"подъем 8:00 отбой 23:30 трен прогулка учеба состояние 8 сладкое нет алкоголь нет полезное книга по психологии",
-		today, "sveta",
+		today, preset("sveta"),
 	)
 	if len(res.Errors) != 0 {
 		t.Fatalf("неожиданные ошибки: %v", res.Errors)
@@ -108,20 +108,25 @@ func TestParseDaySvetaProfile(t *testing.T) {
 }
 
 func TestParseDayProfilesRejectForeignFields(t *testing.T) {
-	if res := ParseDayFor("алго 30", today, "sveta"); len(res.Errors) == 0 || res.Day.Algorithms != nil {
+	if res := ParseDayIn("алго 30", today, preset("sveta")); len(res.Errors) == 0 || res.Day.Algorithms != nil {
 		t.Fatalf("Свете доступны поля Паши: %+v", res)
 	}
-	if res := ParseDayFor("прогулка", today, "pasha"); len(res.Errors) == 0 || res.Day.Walk != nil {
+	if res := ParseDayIn("прогулка", today, preset("pasha")); len(res.Errors) == 0 || res.Day.Walk != nil {
 		t.Fatalf("Паше доступны поля Светы: %+v", res)
 	}
 }
 
 func TestParseDayUsefulBareAliases(t *testing.T) {
 	for input, want := range map[string]string{"литература": "литература", "ютуб": "обучающее видео"} {
-		res := ParseDayFor(input, today, "sveta")
+		res := ParseDayIn(input, today, preset("sveta"))
 		if len(res.Errors) != 0 {
 			t.Fatalf("%q: %v", input, res.Errors)
 		}
 		mustStr(t, res.Day.Useful, want)
 	}
+}
+
+func preset(name string) model.FieldSet {
+	p, _ := model.PresetByName(name)
+	return p.Fields
 }

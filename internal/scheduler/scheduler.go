@@ -29,11 +29,21 @@ type Scheduler struct {
 	cfg  *config.Config
 	st   *store.Store
 	log  *slog.Logger
-	jobs []Job
+	jobs func() []Job
+
+	// OnError вызывается, когда задача упала: так о сбое узнаёт владелец, а не
+	// только журнал на сервере.
+	OnError func(ctx context.Context, job string, err error)
 }
 
-// New создаёт планировщик.
+// New создаёт планировщик с постоянным списком задач.
 func New(cfg *config.Config, st *store.Store, log *slog.Logger, jobs ...Job) *Scheduler {
+	return NewDynamic(cfg, st, log, func() []Job { return jobs })
+}
+
+// NewDynamic берёт список задач заново на каждом тике: пользователи
+// появляются и меняют часовой пояс без перезапуска бота.
+func NewDynamic(cfg *config.Config, st *store.Store, log *slog.Logger, jobs func() []Job) *Scheduler {
 	return &Scheduler{cfg: cfg, st: st, log: log, jobs: jobs}
 }
 
@@ -57,7 +67,7 @@ func (s *Scheduler) tick(ctx context.Context) {
 }
 
 func (s *Scheduler) tickAt(ctx context.Context, instant time.Time) {
-	for _, j := range s.jobs {
+	for _, j := range s.jobs() {
 		location := s.cfg.Location
 		if j.Location != nil {
 			location = j.Location
@@ -94,6 +104,9 @@ func (s *Scheduler) tickAt(ctx context.Context, instant time.Time) {
 		}
 		if err := j.Run(ctx); err != nil {
 			s.log.Error("задача не отработала", "job", j.Name, "err", err)
+			if s.OnError != nil {
+				s.OnError(ctx, j.Name, err)
+			}
 			continue // не отмечаем как выполненную — повторим на следующем тике
 		}
 		if err := s.st.SetJobLastRun(j.Name, today); err != nil {

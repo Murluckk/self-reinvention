@@ -55,11 +55,11 @@ type DayCommand struct {
 // `ключ значение` равнозначны, булев ключ можно писать голым флагом (`чисто`),
 // а числа принимаются с запятой и с единицами измерения (`вес 73,4кг`).
 func ParseDay(args, today string) DayCommand {
-	return ParseDayFor(args, today, "")
+	return ParseDayIn(args, today, nil)
 }
 
-// ParseDayFor разбирает только поля, доступные пользовательскому профилю.
-func ParseDayFor(args, today, profile string) DayCommand {
+// ParseDayIn разбирает только поля из набора пользователя.
+func ParseDayIn(args, today string, fs model.FieldSet) DayCommand {
 	res := DayCommand{Day: &model.Day{Date: today}}
 	toks := tokenize(args)
 	i := 0
@@ -79,14 +79,14 @@ func ParseDayFor(args, today, profile string) DayCommand {
 			key, val, hasVal = t.text[:idx], t.text[idx+1:], true
 		}
 		f, ok := model.FieldByKey(key)
-		if ok && !f.InProfile(profile) {
+		if ok && !fs.Has(f.DB) {
 			ok = false
 		}
 		if !ok {
 			// Голые значения-сокращения: «зал» вместо «трен=зал». Ради скорости
 			// ввода — то, что пишется чаще всего, должно писаться короче всего.
 			if bv, isBare := bareValues[strings.ToLower(key)]; isBare && !hasVal {
-				if bf, found := model.FieldByColumn(bv.col); found && bf.InProfile(profile) {
+				if bf, found := model.FieldByColumn(bv.col); found && fs.Has(bf.DB) {
 					if err := bf.SetAny(res.Day, bv.val); err != nil {
 						res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", key, err))
 					}
@@ -166,6 +166,12 @@ var bareValues = map[string]struct{ col, val string }{
 }
 
 var unitSuffix = regexp.MustCompile(`^([0-9]+(?:[.,][0-9]+)?)\s*[^\s0-9.,:]*$`)
+
+// SetValue кладёт введённое человеком значение в поле: общий вход для /d,
+// вечернего опроса и правки голосовой записи.
+func SetValue(d *model.Day, f *model.Field, val string) error {
+	return setField(d, f, val)
+}
 
 // setField кладёт строковое значение в поле, отрезая единицы измерения у чисел:
 // `73,4кг` и `40мин` должны проходить так же, как `73.4` и `40`.

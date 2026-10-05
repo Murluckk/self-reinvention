@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/murluckk/self-reinvention/internal/store"
 )
 
 const backupRetention = 30 * 24 * time.Hour
@@ -20,11 +22,17 @@ func (b *Bot) SendBackup(ctx context.Context) error {
 	if err := b.st.Backup(path); err != nil {
 		return err
 	}
+	// Копию сразу открываем отдельно и проверяем: битый бэкап выяснится
+	// сегодня, а не в день, когда он понадобится.
+	counts, err := store.VerifyBackup(path)
+	if err != nil {
+		return fmt.Errorf("бэкап не прошёл проверку: %w", err)
+	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	caption := fmt.Sprintf("🔐 Ежедневный бэкап трекера за %s · пользователей: %d", b.cfg.Today(), len(b.cfg.Users))
+	caption := fmt.Sprintf("🔐 Ежедневный бэкап трекера за %s · проверен: %s", b.cfg.Today(), counts)
 	if err := b.tg.SendDocument(ctx, b.cfg.OwnerID, name, content, caption); err != nil {
 		return err
 	}

@@ -1,0 +1,6 @@
+[Unit]
+Description=Telegram alert: tracker-bot failed
+
+[Service]
+Type=oneshot
+ExecStart=/opt/tracker/alert.sh

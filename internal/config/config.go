@@ -8,23 +8,20 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/murluckk/self-reinvention/internal/model"
 )
 
-// User — один разрешённый пользователь бота и его доступ к дашборду.
+// User — пользователь из TRACKER_USERS. После первого запуска он живёт в
+// базе, а env нужен только для импорта.
 type User struct {
 	TelegramID        int64
 	Name              string
-	Profile           string
+	Profile           string // имя стартового набора полей, см. model.Presets
 	Timezone          string
-	Location          *time.Location
 	DashboardUser     string
 	DashboardPassword string
 }
-
-const (
-	ProfilePasha = "pasha"
-	ProfileSveta = "sveta"
-)
 
 // Config — всё, что боту нужно знать о внешнем мире, плюс пороги для флагов
 // недельного отчёта.
@@ -37,6 +34,7 @@ type Config struct {
 	OllamaURL         string
 	OllamaModel       string
 	DashboardAddr     string
+	DashboardURL      string // публичный адрес дашборда для сообщений бота
 	DashboardUser     string
 	DashboardPassword string
 	Users             []User
@@ -70,6 +68,7 @@ func Load() (*Config, error) {
 		OllamaURL:         env("OLLAMA_URL", "http://127.0.0.1:11434"),
 		OllamaModel:       env("OLLAMA_MODEL", "qwen2.5:7b-instruct"),
 		DashboardAddr:     os.Getenv("DASHBOARD_ADDR"),
+		DashboardURL:      os.Getenv("DASHBOARD_URL"),
 		DashboardUser:     env("DASHBOARD_USER", "tracker"),
 		DashboardPassword: os.Getenv("DASHBOARD_PASSWORD"),
 		LLMAPIKey:         os.Getenv("LLM_API_KEY"),
@@ -105,18 +104,11 @@ func Load() (*Config, error) {
 	}
 	c.OwnerID = id
 	c.Users, err = parseUsers(os.Getenv("TRACKER_USERS"), User{
-		TelegramID: id, Name: c.DashboardUser, Profile: ProfilePasha,
+		TelegramID: id, Name: c.DashboardUser, Profile: "pasha",
 		DashboardUser: c.DashboardUser, DashboardPassword: c.DashboardPassword,
 	})
 	if err != nil {
 		return nil, err
-	}
-	if c.DashboardAddr != "" {
-		for _, u := range c.Users {
-			if u.DashboardUser == "" || u.DashboardPassword == "" {
-				return nil, fmt.Errorf("у пользователя %d не заданы логин/пароль дашборда", u.TelegramID)
-			}
-		}
 	}
 
 	tz := env("TZ", "UTC")
@@ -125,17 +117,15 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("не знаю часовой пояс %q: %w", tz, err)
 	}
 	c.Location = loc
+	// PASHA_TZ и SVETA_TZ — наследие времён, когда профили были зашиты в код.
+	// Используются только при импорте; дальше пояс меняется командой /tz.
 	for i := range c.Users {
-		zone := env("PASHA_TZ", "Asia/Vladivostok")
-		if c.Users[i].Profile == ProfileSveta {
-			zone = env("SVETA_TZ", "Asia/Irkutsk")
+		switch c.Users[i].Profile {
+		case "pasha":
+			c.Users[i].Timezone = os.Getenv("PASHA_TZ")
+		case "sveta":
+			c.Users[i].Timezone = os.Getenv("SVETA_TZ")
 		}
-		userLoc, err := time.LoadLocation(zone)
-		if err != nil {
-			return nil, fmt.Errorf("не знаю часовой пояс пользователя %s %q: %w", c.Users[i].Name, zone, err)
-		}
-		c.Users[i].Timezone = zone
-		c.Users[i].Location = userLoc
 	}
 	return c, nil
 }
@@ -171,35 +161,13 @@ func (c *Config) Now() time.Time { return time.Now().In(c.Location) }
 // Today возвращает сегодняшнюю дату в формате YYYY-MM-DD.
 func (c *Config) Today() string { return c.Now().Format("2006-01-02") }
 
-// NowFor и TodayFor возвращают локальное время конкретного пользователя.
-func (c *Config) NowFor(id int64) time.Time {
-	if user, ok := c.User(id); ok && user.Location != nil {
-		return time.Now().In(user.Location)
-	}
-	return c.Now()
-}
-
-func (c *Config) TodayFor(id int64) string {
-	return c.NowFor(id).Format("2006-01-02")
-}
-
-// User возвращает настройки разрешённого Telegram-пользователя.
-func (c *Config) User(id int64) (User, bool) {
-	for _, u := range c.Users {
-		if u.TelegramID == id {
-			return u, true
-		}
-	}
-	return User{}, false
-}
-
 // parseUsers понимает TRACKER_USERS=id:имя:профиль:login:password,... Старые
 // форматы без профиля и имени тоже принимаются.
 // Если переменная не задана, сохраняется обратная совместимость с OWNER_ID.
 func parseUsers(raw string, fallback User) ([]User, error) {
 	if strings.TrimSpace(raw) == "" {
 		if fallback.Profile == "" {
-			fallback.Profile = ProfilePasha
+			fallback.Profile = "pasha"
 		}
 		return []User{fallback}, nil
 	}
@@ -227,16 +195,18 @@ func parseUsers(raw string, fallback User) ([]User, error) {
 		if profile == "" {
 			switch strings.ToLower(name) {
 			case "света", "sveta":
-				profile = ProfileSveta
+				profile = "sveta"
 			default:
-				profile = ProfilePasha
+				profile = "pasha"
 			}
 		}
-		if profile != ProfilePasha && profile != ProfileSveta {
+		if _, ok := model.PresetByName(profile); !ok {
 			return nil, fmt.Errorf("TRACKER_USERS: неизвестный профиль %q для %d", profile, id)
 		}
-		if name == "" || login == "" || password == "" {
-			return nil, fmt.Errorf("TRACKER_USERS: пустое имя, логин или пароль для %d", id)
+		// Пароль может быть пустым: пользователь уже в базе, и env больше не
+		// хранит секрет в открытом виде.
+		if name == "" || login == "" {
+			return nil, fmt.Errorf("TRACKER_USERS: пустое имя или логин для %d", id)
 		}
 		if seenIDs[id] || seenLogins[login] {
 			return nil, fmt.Errorf("TRACKER_USERS: повтор id или логина для %d", id)

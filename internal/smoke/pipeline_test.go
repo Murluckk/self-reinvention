@@ -77,20 +77,22 @@ func TestPipelineFromCommandsToReport(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	pasha, _ := model.PresetByName("pasha")
 	days, _ := st.Days(userID, "2026-08-18", today)
 	money, _ := st.Money(userID, "2026-08-18", today)
 	moneyAll, _ := st.MoneyUntil(userID, today)
 	notes, _ := st.Notes(userID, "2026-08-18", today)
 	s := report.Build(report.Input{From: "2026-08-18", To: today, Days: days, DaysAll: days,
-		Money: money, MoneyAll: moneyAll, Notes: notes, Today: today, Cfg: testCfg()})
+		Money: money, MoneyAll: moneyAll, Notes: notes, Today: today, Cfg: testCfg(),
+		Fields: pasha.Fields, Finance: pasha.Finance})
 
 	if s.FilledDays != 7 {
 		t.Fatalf("заполнено дней: %d", s.FilledDays)
 	}
-	if s.Workouts != 5 {
-		t.Fatalf("тренировок %d, ожидалось 5", s.Workouts)
+	if s.Field("workout").Yes != 5 {
+		t.Fatalf("тренировок %d, ожидалось 5", s.Field("workout").Yes)
 	}
-	if s.Streaks.Algorithms != 4 || s.Streaks.Filled != 7 {
+	if s.Streaks.Of("algorithms") != 4 || s.Streaks.Filled != 7 {
 		t.Fatalf("стрики: %+v", s.Streaks)
 	}
 	if rub := s.Currencies["RUB"]; rub.Capital != 150000 || rub.Income != 250000 {

@@ -5,41 +5,64 @@ package dashboard
 
 import (
 	"context"
-	"crypto/subtle"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"html/template"
 	"log/slog"
-	"math"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/murluckk/self-reinvention/internal/auth"
 	"github.com/murluckk/self-reinvention/internal/config"
 	"github.com/murluckk/self-reinvention/internal/model"
 	"github.com/murluckk/self-reinvention/internal/parse"
 	"github.com/murluckk/self-reinvention/internal/report"
 	"github.com/murluckk/self-reinvention/internal/store"
+	"github.com/murluckk/self-reinvention/internal/users"
 )
 
 // Dashboard — HTTP-сервер личной сводки.
 type Dashboard struct {
-	cfg *config.Config
-	st  *store.Store
-	log *slog.Logger
-	tpl *template.Template
+	cfg   *config.Config
+	st    *store.Store
+	users *users.Registry
+	log   *slog.Logger
+	tpl   *template.Template
+
+	// Перебор паролей: дашборд открыт в интернет через reverse proxy.
+	byIP    *auth.Limiter
+	byLogin *auth.Limiter
+	dummy   string // хэш для несуществующего логина, чтобы время ответа не выдавало логины
+
+	mu       sync.Mutex
+	verified map[[32]byte]time.Time // кэш успешных проверок: PBKDF2 дорог на каждый запрос
+
+	// OnBlocked вызывается, когда IP или логин упёрся в лимит попыток.
+	OnBlocked func(key string)
 }
+
+const verifiedTTL = 10 * time.Minute
 
 // New создаёт дашборд. Обычно он слушает только 127.0.0.1, а HTTPS завершает
 // reverse proxy на той же машине.
-func New(cfg *config.Config, st *store.Store, log *slog.Logger) *Dashboard {
+func New(cfg *config.Config, st *store.Store, reg *users.Registry, log *slog.Logger) *Dashboard {
+	dummy, _ := auth.Hash(auth.Generate())
 	return &Dashboard{
-		cfg: cfg,
-		st:  st,
-		log: log,
-		tpl: template.Must(template.New("dashboard").Parse(pageHTML)),
+		cfg:      cfg,
+		st:       st,
+		users:    reg,
+		log:      log,
+		tpl:      template.Must(template.New("dashboard").Parse(pageHTML)),
+		byIP:     auth.NewLimiter(10, 15*time.Minute),
+		byLogin:  auth.NewLimiter(20, 15*time.Minute),
+		dummy:    dummy,
+		verified: map[[32]byte]time.Time{},
 	}
 }
 
@@ -79,23 +102,81 @@ func (d *Dashboard) Run(ctx context.Context) error {
 
 func (d *Dashboard) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, password, ok := r.BasicAuth()
-		var userID int64
-		matched := false
-		for _, candidate := range d.cfg.Users {
-			userOK := subtle.ConstantTimeCompare([]byte(user), []byte(candidate.DashboardUser)) == 1
-			passwordOK := subtle.ConstantTimeCompare([]byte(password), []byte(candidate.DashboardPassword)) == 1
-			if userOK && passwordOK {
-				userID, matched = candidate.TelegramID, true
-			}
+		ip := clientIP(r)
+		login, password, ok := r.BasicAuth()
+		if d.byIP.Blocked(ip) || (ok && d.byLogin.Blocked(login)) {
+			w.Header().Set("Retry-After", "900")
+			http.Error(w, "Слишком много неудачных попыток. Подожди 15 минут.", http.StatusTooManyRequests)
+			return
 		}
-		if !ok || !matched {
+		user, valid := d.check(login, password)
+		if !ok || !valid {
+			if ok {
+				d.fail(ip, login)
+			}
 			w.Header().Set("WWW-Authenticate", `Basic realm="Личный трекер", charset="UTF-8"`)
 			http.Error(w, "Нужен логин и пароль", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userIDKey{}, userID)))
+		d.byIP.Reset(ip)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userIDKey{}, user.ID)))
 	})
+}
+
+// check сверяет логин и пароль. Успешные пары кэшируются на 10 минут: браузер
+// шлёт Basic Auth с каждым запросом, а PBKDF2 намеренно медленный.
+func (d *Dashboard) check(login, password string) (*model.User, bool) {
+	user, found := d.users.ByLogin(login)
+	if !found {
+		auth.Verify(d.dummy, password)
+		return nil, false
+	}
+	key := sha256.Sum256([]byte(login + "\x00" + password + "\x00" + user.PasswordHash))
+	d.mu.Lock()
+	until, cached := d.verified[key]
+	d.mu.Unlock()
+	if cached && time.Now().Before(until) {
+		return user, true
+	}
+	if !auth.Verify(user.PasswordHash, password) {
+		return nil, false
+	}
+	d.mu.Lock()
+	for k, t := range d.verified {
+		if time.Now().After(t) {
+			delete(d.verified, k)
+		}
+	}
+	d.verified[key] = time.Now().Add(verifiedTTL)
+	d.mu.Unlock()
+	return user, true
+}
+
+func (d *Dashboard) fail(ip, login string) {
+	d.byIP.Fail(ip)
+	d.byLogin.Fail(login)
+	d.log.Warn("неудачный вход в дашборд", "ip", ip, "login", login)
+	if d.OnBlocked == nil {
+		return
+	}
+	if d.byIP.Blocked(ip) {
+		d.OnBlocked("IP " + ip)
+	} else if d.byLogin.Blocked(login) {
+		d.OnBlocked("логин " + login)
+	}
+}
+
+// clientIP берёт адрес клиента из X-Forwarded-For, который выставляет Caddy.
+// Заголовку можно верить, только пока сервер слушает localhost за прокси.
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[len(parts)-1])
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 type userIDKey struct{}
@@ -143,6 +224,7 @@ func periodFrom(r *http.Request) int {
 type pageData struct {
 	Name       string
 	Period     int
+	Insights   []string
 	From       string
 	To         string
 	Periods    []periodLink
@@ -239,12 +321,11 @@ type expenseEntry struct {
 }
 
 func (d *Dashboard) page(userID int64, period int, selectedDate string) (*pageData, error) {
-	user, _ := d.cfg.User(userID)
-	profile := user.Profile
-	if profile == "" {
-		profile = config.ProfilePasha
+	user, ok := d.users.Get(userID)
+	if !ok {
+		return nil, fmt.Errorf("пользователь %d не найден", userID)
 	}
-	to := d.cfg.TodayFor(userID)
+	to := user.Today()
 	from := report.AddDays(to, -(period - 1))
 	days, err := d.st.Days(userID, from, to)
 	if err != nil {
@@ -254,23 +335,24 @@ func (d *Dashboard) page(userID int64, period int, selectedDate string) (*pageDa
 	if err != nil {
 		return nil, err
 	}
-	money, err := d.st.Money(userID, from, to)
-	if err != nil {
-		return nil, err
-	}
-	moneyAll, err := d.st.MoneyUntil(userID, to)
-	if err != nil {
-		return nil, err
+	var money, moneyAll []*model.Money
+	if user.Finance {
+		if money, err = d.st.Money(userID, from, to); err != nil {
+			return nil, err
+		}
+		if moneyAll, err = d.st.MoneyUntil(userID, to); err != nil {
+			return nil, err
+		}
 	}
 	stats := report.Build(report.Input{
 		From: from, To: to,
 		Days: days, DaysAll: daysAll,
 		Money: money, MoneyAll: moneyAll,
-		Today: to, Cfg: d.cfg, Profile: profile,
+		Today: to, Cfg: d.cfg, Fields: user.Fields, Finance: user.Finance,
 	})
 
 	p := &pageData{
-		Period: period, From: from, To: to,
+		Name: user.Name, Period: period, From: from, To: to,
 		Periods: []periodLink{
 			{7, "7 дней", period == 7},
 			{30, "30 дней", period == 30},
@@ -281,47 +363,27 @@ func (d *Dashboard) page(userID int64, period int, selectedDate string) (*pageDa
 		TotalDays:  stats.TotalDays,
 		Flags:      stats.Flags,
 	}
-	p.Name = user.Name
-	p.States = []stateCard{
-		{"Эмоциональное состояние", scaleValue(stats.Mood), "mood"},
+	for _, f := range stats.Order {
+		fs := stats.Field(f.DB)
+		if f.Kind == model.KindScale {
+			p.States = append(p.States, stateCard{f.Label, scaleValue(fs.Series), "mood"})
+			continue
+		}
+		p.Cards = append(p.Cards, card{f.Label, fs.Value(), fs.Hint()})
+		if f.Habit() {
+			p.Streaks = append(p.Streaks, streak{f.Label, fmt.Sprintf("%d дн.", stats.Streaks.Of(f.DB))})
+		}
 	}
-	p.Chart = makeChart(days)
+	p.Streaks = append(p.Streaks, streak{"Записи", fmt.Sprintf("%d дн.", stats.Streaks.Filled)})
+	for _, in := range stats.Insights {
+		p.Insights = append(p.Insights, in.Text)
+	}
+	p.Chart = makeChart(days, user.Fields)
+
 	expenses := map[string]float64{}
-	if profile == config.ProfileSveta {
-		p.Cards = []card{
-			{"Последний подъём", seriesLastTime(stats.Wake), seriesHint(stats.Wake, "отмечено")},
-			{"Последнее засыпание", seriesLastTime(stats.Bed), seriesHint(stats.Bed, "отмечено")},
-			{"Тренировки", strconv.Itoa(stats.Workouts), "за период"},
-			{"Прогулки", strconv.Itoa(stats.Walks), "за период"},
-			{"Учёба", strconv.Itoa(stats.StudyDays), "дней"},
-			{"Полезные занятия", strconv.Itoa(stats.UsefulDays), "дней"},
-			{"Сладкое", fmt.Sprintf("%d дн.", stats.SweetDays), fmt.Sprintf("из %d отмеченных", stats.SweetKnown)},
-			{"Алкоголь", fmt.Sprintf("%d дн.", stats.AlcoholDays), fmt.Sprintf("из %d отмеченных", stats.AlcoholKnown)},
-		}
-		p.Streaks = []streak{
-			{"Учёба", fmt.Sprintf("%d дн.", stats.Streaks.Study)},
-			{"Прогулки", fmt.Sprintf("%d дн.", stats.Streaks.Walk)},
-			{"Тренировки", fmt.Sprintf("%d дн.", stats.Streaks.Workout)},
-			{"Полезное", fmt.Sprintf("%d дн.", stats.Streaks.Useful)},
-		}
-	} else {
-		p.Cards = []card{
-			{"Последний подъём", seriesLastTime(stats.Wake), seriesHint(stats.Wake, "отмечено")},
-			{"Последнее засыпание", seriesLastTime(stats.Bed), seriesHint(stats.Bed, "отмечено")},
-			{"Алгоритмы", fmt.Sprintf("%.0f мин", stats.Algorithms.Sum()), fmt.Sprintf("%d дней", stats.AlgorithmDays)},
-			{"Системный дизайн", fmt.Sprintf("%.0f мин", stats.SystemDesign.Sum()), fmt.Sprintf("%d дней", stats.SystemDesignDays)},
-		}
-		p.Streaks = []streak{
-			{"Алгоритмы", fmt.Sprintf("%d дн.", stats.Streaks.Algorithms)},
-			{"Системный дизайн", fmt.Sprintf("%d дн.", stats.Streaks.SystemDesign)},
-			{"Тренировки", fmt.Sprintf("%d дн.", stats.Streaks.Workout)},
-			{"Записи", fmt.Sprintf("%d дн.", stats.Streaks.Filled)},
-		}
+	if user.Finance {
 		expenses = expenseTotals(money)
 		p.Expense = makeExpenseDetail(selectedDate, from, to, money)
-	}
-	p.Days = makeDays(days, expenses, profile, period, 31)
-	if profile == config.ProfilePasha {
 		for _, code := range stats.CurOrder {
 			c := stats.Currencies[code]
 			p.Money = append(p.Money, moneyView{
@@ -331,27 +393,8 @@ func (d *Dashboard) page(userID int64, period int, selectedDate string) (*pageDa
 			})
 		}
 	}
+	p.Days = makeDays(days, expenses, user.Fields, period, 31)
 	return p, nil
-}
-
-func seriesLastTime(s report.Series) string {
-	if s.N() == 0 {
-		return "—"
-	}
-	hours := s.Values[s.N()-1]
-	h := int(hours)
-	m := int(math.Round((hours - float64(h)) * 60))
-	if m == 60 {
-		h, m = h+1, 0
-	}
-	return fmt.Sprintf("%02d:%02d", h, m)
-}
-
-func seriesHint(s report.Series, label string) string {
-	if s.N() == 0 {
-		return "нет данных"
-	}
-	return fmt.Sprintf("%s · %d дн.", label, s.N())
 }
 
 func scaleValue(s report.Series) string {
@@ -361,20 +404,19 @@ func scaleValue(s report.Series) string {
 	return fmt.Sprintf("%.1f/10", s.Avg())
 }
 
-func makeChart(days []*model.Day) chart {
-	type source struct {
-		name, class string
-		value       func(*model.Day) *int
-	}
-	sources := []source{
-		{"Состояние", "mood", func(d *model.Day) *int { return d.Mood }},
-	}
+func makeChart(days []*model.Day, set model.FieldSet) chart {
+	classes := []string{"mood", "focus", "energy"}
 	out := chart{}
-	for _, src := range sources {
-		line := chartSeries{Name: src.name, Class: src.class}
+	n := 0
+	for _, f := range set.Fields() {
+		if f.Kind != model.KindScale {
+			continue
+		}
+		line := chartSeries{Name: f.Label, Class: classes[n%len(classes)]}
+		n++
 		for i, day := range days {
-			v := src.value(day)
-			if v == nil {
+			v, ok := f.Get(day).(*int)
+			if !ok || v == nil {
 				continue
 			}
 			x := 400.0
@@ -397,7 +439,7 @@ func makeChart(days []*model.Day) chart {
 	return out
 }
 
-func makeDays(days []*model.Day, expenses map[string]float64, profile string, period, limit int) []dayView {
+func makeDays(days []*model.Day, expenses map[string]float64, set model.FieldSet, period, limit int) []dayView {
 	merged := append([]*model.Day(nil), days...)
 	known := make(map[string]bool, len(days))
 	for _, d := range days {
@@ -416,59 +458,37 @@ func makeDays(days []*model.Day, expenses map[string]float64, profile string, pe
 	out := make([]dayView, 0, len(merged)-start)
 	for i := len(merged) - 1; i >= start; i-- {
 		d := merged[i]
-		if d.EmptyFor(profile) {
+		total := expenses[d.Date]
+		if d.EmptyIn(set) && total == 0 {
 			continue
 		}
 		v := dayView{Date: shortDate(d.Date), Weekday: report.Weekday(d.Date)}
-		add := func(label, value, class, href string) {
-			if value != "" {
-				v.Metrics = append(v.Metrics, metric{Label: label, Value: value, Class: class, Href: href})
+		for _, f := range set.Fields() {
+			if !f.IsSet(d) {
+				continue
 			}
+			m := metric{Label: f.Label, Value: f.FormatValue(d)}
+			switch f.Kind {
+			case model.KindDuration:
+				m.Value = durationValue(*f.Get(d).(*int))
+			case model.KindScale:
+				m.Value, m.Class = fmt.Sprintf("%d/10", *f.Get(d).(*int)), "mood"
+			case model.KindBool:
+				if *f.Get(d).(*bool) != f.Bad {
+					m.Class = "good"
+				} else {
+					m.Class = "bad"
+				}
+			case model.KindString:
+				m.Class = "good"
+			}
+			v.Metrics = append(v.Metrics, m)
 		}
-		addBool := func(label string, value *bool, positiveGood bool) {
-			if value == nil {
-				return
-			}
-			text, class := "нет", ""
-			if *value {
-				text = "да"
-			}
-			if *value == positiveGood {
-				class = "good"
-			} else {
-				class = "bad"
-			}
-			add(label, text, class, "")
-		}
-		if d.Wake != nil {
-			add("Подъём", *d.Wake, "", "")
-		}
-		if d.Bed != nil {
-			add("Заснул", *d.Bed, "", "")
-		}
-		if profile == config.ProfileSveta {
-			addBool("Прогулка", d.Walk, true)
-			addBool("Учёба", d.Study, true)
-			if d.Useful != nil {
-				add("Полезное занятие", *d.Useful, "good", "")
-			}
-			addBool("Сладкое", d.Sweet, false)
-			addBool("Алкоголь", d.Alcohol, false)
-		} else {
-			if d.Algorithms != nil {
-				add("Алгоритмы", durationValue(*d.Algorithms), "", "")
-			}
-			if d.SystemDesign != nil {
-				add("Системный дизайн", durationValue(*d.SystemDesign), "", "")
-			}
-		}
-		addBool("Тренировка", d.Workout, true)
-		if d.Mood != nil {
-			add("Состояние", fmt.Sprintf("%d/10", *d.Mood), "mood", "")
-		}
-		if total := expenses[d.Date]; total > 0 {
-			add("Траты", parse.FormatAmount(total)+" ₽", "expense",
-				fmt.Sprintf("/?days=%d&date=%s#expenses", period, d.Date))
+		if total > 0 {
+			v.Metrics = append(v.Metrics, metric{
+				Label: "Траты", Value: parse.FormatAmount(total) + " ₽", Class: "expense",
+				Href: fmt.Sprintf("/?days=%d&date=%s#expenses", period, d.Date),
+			})
 		}
 		out = append(out, v)
 	}
@@ -587,6 +607,8 @@ section{margin-top:26px}h2{font-size:18px;margin:0 0 10px;letter-spacing:-.01em}
 <div class="expense-grid">{{range .Categories}}<div class="expense-line"><span>{{.Name}}</span><b>{{.Amount}}</b></div>{{end}}</div>
 <div class="expense-entries">{{range .Entries}}<div class="expense-entry"><b>{{.Category}}</b><span>{{.Comment}}</span><b>{{.Amount}}</b></div>{{end}}</div>
 </article></section>{{end}}
+
+{{if .Insights}}<section><h2>Наблюдения <span class="sub">· за 90 дней, связи, а не причины</span></h2><div class="panel"><ul class="flags">{{range .Insights}}<li>{{.}}</li>{{end}}</ul></div></section>{{end}}
 
 {{if .Flags}}<section><h2>Стоит обратить внимание</h2><div class="panel"><ul class="flags">{{range .Flags}}<li>{{.}}</li>{{end}}</ul></div></section>{{end}}
 

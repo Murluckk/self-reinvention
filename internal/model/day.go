@@ -31,32 +31,32 @@ const (
 type Day struct {
 	Date string `db:"date"`
 
-	Wake         *string `db:"wake"          key:"подъем,подъём,встал,wake"          kind:"time"     label:"Подъём"             desc:"время подъёма, HH:MM"                         profile:"pasha,sveta"`
-	Bed          *string `db:"bed"           key:"отбой,заснул,лег,лёг,bed"           kind:"time"     label:"Заснул"             desc:"время засыпания, HH:MM"                       profile:"pasha,sveta"`
-	Algorithms   *int    `db:"algorithms"    key:"алго,алгоритмы,algorithms"          kind:"duration" label:"Алгоритмы"          desc:"минуты алгоритмов; 0 если не занимался"      profile:"pasha"`
-	SystemDesign *int    `db:"system_design" key:"системы,системдизайн,systemdesign"  kind:"duration" label:"Системный дизайн"   desc:"минуты системного дизайна; 0 если не занимался" profile:"pasha"`
-	Workout      *bool   `db:"workout"       key:"трен,тренировка,workout"            kind:"bool"     label:"Тренировка"         desc:"была ли тренировка"                           profile:"pasha,sveta"`
-	Walk         *bool   `db:"walk"          key:"прогулка,гуляла,walk"               kind:"bool"     label:"Прогулка"           desc:"была ли прогулка"                             profile:"sveta"`
-	Study        *bool   `db:"study"         key:"учеба,учёба,занятия,study"          kind:"bool"     label:"Учёба"              desc:"занималась ли учёбой"                         profile:"sveta"`
-	Useful       *string `db:"useful"        key:"полезное,обучение"                  kind:"string"   label:"Полезное занятие"   desc:"литература, обучающее видео или другое полезное занятие" profile:"sveta" rest:"true"`
-	Mood         *int    `db:"mood"          key:"состояние,настроение,mood"          kind:"scale"    label:"Состояние"          desc:"эмоциональное состояние по шкале 1-10"       profile:"pasha,sveta"`
-	Sweet        *bool   `db:"sweet"         key:"сладкое,сладости,sweet"             kind:"bool"     label:"Сладкое"            desc:"ела ли сладкое"                               profile:"sveta"`
-	Alcohol      *bool   `db:"alcohol"       key:"алкоголь,вино,alcohol"              kind:"bool"     label:"Алкоголь"           desc:"был ли алкоголь"                              profile:"sveta"`
-	Note         *string `db:"note"          key:"note,заметка,коммент"               kind:"string"   label:"Заметка"            desc:"свободный комментарий к дню"                 profile:"pasha,sveta" rest:"true"`
+	Wake         *string `db:"wake"          key:"подъем,подъём,встал,wake"          kind:"time"     label:"Подъём"             desc:"время подъёма, HH:MM"`
+	Bed          *string `db:"bed"           key:"отбой,заснул,лег,лёг,bed"           kind:"time"     label:"Заснул"             desc:"время засыпания, HH:MM"`
+	Algorithms   *int    `db:"algorithms"    key:"алго,алгоритмы,algorithms"          kind:"duration" label:"Алгоритмы"          desc:"минуты алгоритмов; 0 если не занимался"`
+	SystemDesign *int    `db:"system_design" key:"системы,системдизайн,systemdesign"  kind:"duration" label:"Системный дизайн"   desc:"минуты системного дизайна; 0 если не занимался"`
+	Workout      *bool   `db:"workout"       key:"трен,тренировка,workout"            kind:"bool"     label:"Тренировка"         desc:"была ли тренировка"`
+	Walk         *bool   `db:"walk"          key:"прогулка,гуляла,walk"               kind:"bool"     label:"Прогулка"           desc:"была ли прогулка"`
+	Study        *bool   `db:"study"         key:"учеба,учёба,занятия,study"          kind:"bool"     label:"Учёба"              desc:"занималась ли учёбой"`
+	Useful       *string `db:"useful"        key:"полезное,обучение"                  kind:"string"   label:"Полезное занятие"   desc:"литература, обучающее видео или другое полезное занятие" rest:"true"`
+	Mood         *int    `db:"mood"          key:"состояние,настроение,mood"          kind:"scale"    label:"Состояние"          desc:"эмоциональное состояние по шкале 1-10"`
+	Sweet        *bool   `db:"sweet"         key:"сладкое,сладости,sweet"             kind:"bool"     label:"Сладкое"            desc:"ела ли сладкое"                               bad:"true"`
+	Alcohol      *bool   `db:"alcohol"       key:"алкоголь,вино,alcohol"              kind:"bool"     label:"Алкоголь"           desc:"был ли алкоголь"                              bad:"true"`
+	Note         *string `db:"note"          key:"note,заметка,коммент"               kind:"string"   label:"Заметка"            desc:"свободный комментарий к дню" rest:"true"`
 }
 
 // Field — описание одного поля записи дня, собранное из тегов структуры.
 type Field struct {
-	Index    int      // индекс поля в структуре Day, для reflect
-	DB       string   // имя колонки в SQLite и ключ в JSON от LLM
-	Kind     Kind     // тип значения
-	Keys     []string // ключи, которые понимает парсер; первый — канонический
-	Label    string   // человекочитаемое имя
-	Unit     string   // единица измерения для вывода, может быть пустой
-	Desc     string   // описание для JSON-схемы LLM
-	Profiles []string // профили пользователей, которым поле показывается
-	Rest     bool     // забирает остаток строки, а не один токен
-	GoField  reflect.StructField
+	Index   int      // индекс поля в структуре Day, для reflect
+	DB      string   // имя колонки в SQLite и ключ в JSON от LLM
+	Kind    Kind     // тип значения
+	Keys    []string // ключи, которые понимает парсер; первый — канонический
+	Label   string   // человекочитаемое имя
+	Unit    string   // единица измерения для вывода, может быть пустой
+	Desc    string   // описание для JSON-схемы LLM
+	Bad     bool     // «да» — это плохо (сладкое, алкоголь): серии не считаются
+	Rest    bool     // забирает остаток строки, а не один токен
+	GoField reflect.StructField
 }
 
 var (
@@ -74,16 +74,16 @@ func init() {
 			continue // Date и всё, что не является заполняемым полем
 		}
 		f := Field{
-			Index:    i,
-			DB:       sf.Tag.Get("db"),
-			Kind:     Kind(sf.Tag.Get("kind")),
-			Keys:     strings.Split(key, ","),
-			Label:    sf.Tag.Get("label"),
-			Unit:     sf.Tag.Get("unit"),
-			Desc:     sf.Tag.Get("desc"),
-			Profiles: strings.Split(sf.Tag.Get("profile"), ","),
-			Rest:     sf.Tag.Get("rest") == "true",
-			GoField:  sf,
+			Index:   i,
+			DB:      sf.Tag.Get("db"),
+			Kind:    Kind(sf.Tag.Get("kind")),
+			Keys:    strings.Split(key, ","),
+			Label:   sf.Tag.Get("label"),
+			Unit:    sf.Tag.Get("unit"),
+			Desc:    sf.Tag.Get("desc"),
+			Bad:     sf.Tag.Get("bad") == "true",
+			Rest:    sf.Tag.Get("rest") == "true",
+			GoField: sf,
 		}
 		fields = append(fields, f)
 	}
@@ -99,28 +99,39 @@ func init() {
 // Fields возвращает поля записи дня в порядке объявления.
 func Fields() []Field { return fields }
 
-// FieldsFor возвращает только поля конкретного пользовательского профиля.
-func FieldsFor(profile string) []Field {
-	var out []Field
-	for _, f := range fields {
-		if f.InProfile(profile) {
-			out = append(out, f)
-		}
-	}
-	return out
-}
-
-// InProfile сообщает, должно ли поле быть видно в указанном профиле.
-func (f Field) InProfile(profile string) bool {
-	if profile == "" {
+// Habit сообщает, что по полю имеет смысл считать серию «сколько дней подряд
+// получилось»: занятия, полезные привычки и описания полезного дела.
+func (f Field) Habit() bool {
+	switch f.Kind {
+	case KindDuration:
 		return true
-	}
-	for _, p := range f.Profiles {
-		if p == profile {
-			return true
-		}
+	case KindBool:
+		return !f.Bad
+	case KindString:
+		return f.DB != "note"
 	}
 	return false
+}
+
+// Done сообщает, засчитывается ли день как выполненный по полю-привычке:
+// nil — данных нет, иначе да или нет.
+func (f *Field) Done(d *Day) *bool {
+	v := f.Get(d)
+	if v == nil {
+		return nil
+	}
+	var done bool
+	switch x := v.(type) {
+	case *int:
+		done = *x > 0
+	case *float64:
+		done = *x > 0
+	case *bool:
+		done = *x
+	case *string:
+		done = strings.TrimSpace(*x) != ""
+	}
+	return &done
 }
 
 // FieldByKey ищет поле по любому из его ключей (регистр не важен).
@@ -294,14 +305,14 @@ func MergeMissing(dst, src *Day) {
 
 // SetFields возвращает поля, заполненные в записи.
 func (d *Day) SetFields() []Field {
-	return d.SetFieldsFor("")
+	return d.SetFieldsIn(nil)
 }
 
-// SetFieldsFor возвращает заполненные поля, видимые в профиле.
-func (d *Day) SetFieldsFor(profile string) []Field {
+// SetFieldsIn возвращает заполненные поля из набора пользователя.
+func (d *Day) SetFieldsIn(fs FieldSet) []Field {
 	var out []Field
 	for i := range fields {
-		if fields[i].InProfile(profile) && fields[i].IsSet(d) {
+		if fs.Has(fields[i].DB) && fields[i].IsSet(d) {
 			out = append(out, fields[i])
 		}
 	}
@@ -311,15 +322,15 @@ func (d *Day) SetFieldsFor(profile string) []Field {
 // MissingFields возвращает поля, которые ещё не заполнены. Заметка не считается
 // обязательной, поэтому в список не попадает.
 func (d *Day) MissingFields() []Field {
-	return d.MissingFieldsFor("")
+	return d.MissingIn(nil)
 }
 
-// MissingFieldsFor возвращает незаполненные обязательные поля профиля.
-func (d *Day) MissingFieldsFor(profile string) []Field {
+// MissingIn возвращает незаполненные обязательные поля из набора пользователя.
+func (d *Day) MissingIn(fs FieldSet) []Field {
 	var out []Field
 	for i := range fields {
 		f := fields[i]
-		if f.DB == "note" || !f.InProfile(profile) || f.IsSet(d) {
+		if f.DB == "note" || !fs.Has(f.DB) || f.IsSet(d) {
 			continue
 		}
 		out = append(out, f)
@@ -330,20 +341,20 @@ func (d *Day) MissingFieldsFor(profile string) []Field {
 // Empty сообщает, что в записи нет ни одного заполненного поля.
 func (d *Day) Empty() bool { return len(d.SetFields()) == 0 }
 
-// EmptyFor проверяет, есть ли в записи данные, видимые указанному профилю.
-func (d *Day) EmptyFor(profile string) bool {
+// EmptyIn проверяет, есть ли в записи данные из набора пользователя.
+func (d *Day) EmptyIn(fs FieldSet) bool {
 	for _, f := range fields {
-		if f.InProfile(profile) && f.IsSet(d) {
+		if fs.Has(f.DB) && f.IsSet(d) {
 			return false
 		}
 	}
 	return true
 }
 
-// KeepProfile удаляет поля другого профиля после общего regex/LLM-разбора.
-func (d *Day) KeepProfile(profile string) {
+// Keep удаляет поля не из набора пользователя после общего regex/LLM-разбора.
+func (d *Day) Keep(fs FieldSet) {
 	for i := range fields {
-		if !fields[i].InProfile(profile) {
+		if !fs.Has(fields[i].DB) {
 			fields[i].Clear(d)
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -31,6 +32,15 @@ func New(token string) *Client {
 		base:  "https://api.telegram.org/bot" + token + "/",
 		fileB: "https://api.telegram.org/file/bot" + token + "/",
 	}
+}
+
+// NewWithBase направляет клиента на другой адрес Bot API — для тестов с
+// поддельным сервером.
+func NewWithBase(token, base string) *Client {
+	c := New(token)
+	c.base = strings.TrimRight(base, "/") + "/bot" + token + "/"
+	c.fileB = strings.TrimRight(base, "/") + "/file/bot" + token + "/"
+	return c
 }
 
 type apiResponse struct {
@@ -213,21 +223,15 @@ func (c *Client) SendDocument(ctx context.Context, chatID int64, filename string
 	return decode(resp, "sendDocument", nil)
 }
 
-// SetMyCommands показывает список команд в меню Telegram.
-func (c *Client) SetMyCommands(ctx context.Context, cmds map[string]string) error {
-	type cmd struct {
-		Command     string `json:"command"`
-		Description string `json:"description"`
-	}
-	// Порядок в меню фиксируем, чтобы он не прыгал между запусками.
-	order := []string{"d", "m", "s", "w", "undo", "help"}
-	var list []cmd
-	for _, k := range order {
-		if v, ok := cmds[k]; ok {
-			list = append(list, cmd{Command: k, Description: v})
-		}
-	}
-	return c.call(ctx, c.api, "setMyCommands", map[string]any{"commands": list}, nil)
+// Command — пункт меню команд.
+type Command struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+// SetMyCommands показывает список команд в меню Telegram в заданном порядке.
+func (c *Client) SetMyCommands(ctx context.Context, cmds []Command) error {
+	return c.call(ctx, c.api, "setMyCommands", map[string]any{"commands": cmds}, nil)
 }
 
 // split режет длинный текст по границам строк.

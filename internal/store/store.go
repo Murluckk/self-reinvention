@@ -118,6 +118,9 @@ func (s *Store) migrate(legacyOwnerID int64) error {
 	if err := s.resetDaySchema(); err != nil {
 		return err
 	}
+	if err := s.migrateAccounts(); err != nil {
+		return err
+	}
 	for _, q := range []string{
 		`CREATE INDEX IF NOT EXISTS notes_user_date ON notes(user_id, date)`,
 		`CREATE INDEX IF NOT EXISTS money_user_date ON money(user_id, date)`,

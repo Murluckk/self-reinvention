@@ -13,8 +13,9 @@ type Update struct {
 
 // User — пользователь Telegram.
 type User struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
+	ID        int64  `json:"id"`
+	Username  string `json:"username"`
+	FirstName string `json:"first_name"`
 }
 
 // Chat — чат.
